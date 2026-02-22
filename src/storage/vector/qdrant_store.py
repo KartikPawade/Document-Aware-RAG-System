@@ -258,13 +258,15 @@ class QdrantStore:
                 namespace=namespace.value,
                 error=str(e),
             )
-            results = client.search(
+            # Use query_points (client 1.17+); search() was removed / differs by version
+            results = client.query_points(
                 collection_name=namespace.value,
-                query_vector=("dense", dense_vector),
+                query=dense_vector,
+                using="dense",
                 query_filter=prefilter,
                 limit=top_k,
                 with_payload=True,
-            )
+            ).points
 
         retrieved = []
         for point in results:

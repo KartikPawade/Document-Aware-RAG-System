@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import traceback
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -161,7 +162,12 @@ class IngestionService:
             return result
 
         except Exception as e:
-            logger.error("Ingestion failed", filename=filename, error=str(e))
+            logger.error(
+                "Ingestion failed",
+                filename=filename,
+                error=str(e),
+                traceback=traceback.format_exc(),
+            )
             await self.pg.update_document_status(
                 source_id=source_id,
                 status="failed",
