@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────────────────────
+# Document Aware RAG / Advanced RAG — Git ignore
+# ─────────────────────────────────────────────────────────────
+
+# ── Environment & secrets ─────────────────────────────────────
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing & quality
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── IDE & editors ─────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Logs & runtime ───────────────────────────────────────────
+logs/
+*.log
+*.log.*
+
+# ── Data & caches (local / dev) ──────────────────────────────
+data/
+*.db
+*.sqlite
+.cache/
+*.cache
+
+# Hugging Face / model caches (local to project)
+advanced-rag/models/
+*.bin
+*.safetensors
+
+# ── Docker (optional local overrides) ─────────────────────────
+docker-compose.override.yml
+.docker/
+
+# ── Misc ─────────────────────────────────────────────────────
+*.bak
+*.tmp
+tmp/
+temp/
+.temp/
+
+
+../advanced-rag-architecture.md
+../RUN.md
