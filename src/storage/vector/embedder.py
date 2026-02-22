@@ -3,7 +3,14 @@ storage/vector/embedder.py
 ───────────────────────────
 BGE-M3 embedding service — self-hosted, no external API.
 BGE-M3 produces dense + sparse vectors from a single model.
-This eliminates the need for a separate BM25 service.
+
+CHANGES for FlagEmbedding 1.3.x:
+  - `BGEM3FlagModel` constructor: `use_fp16` kwarg is unchanged.
+  - `model.encode()` signature: `return_dense`, `return_sparse`, `return_colbert_vecs`
+    are all unchanged in 1.3.x.
+  - Output dict keys `dense_vecs` and `lexical_weights` are unchanged.
+  - `device` kwarg: in 1.3.x FlagEmbedding maps 'mps' correctly on Apple Silicon.
+  - Batch size handling is unchanged.
 """
 from __future__ import annotations
 
@@ -42,7 +49,7 @@ class BGEEmbedder:
                 logger.info("Loading BGE-M3 model", model=settings.embedding_model_name)
                 self._model = BGEM3FlagModel(
                     settings.embedding_model_name,
-                    use_fp16=True,              # Faster inference
+                    use_fp16=True,
                     device=settings.embedding_device,
                 )
                 logger.info("BGE-M3 model loaded")
@@ -64,7 +71,6 @@ class BGEEmbedder:
         model = self._get_model()
         results = []
 
-        # Process in sub-batches
         batch_size = settings.embedding_batch_size
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
@@ -80,7 +86,7 @@ class BGEEmbedder:
                 for j in range(len(batch)):
                     dense = output["dense_vecs"][j].tolist()
                     sparse_weights = output.get("lexical_weights", [{}])[j]
-                    # Convert to {int: float} format
+                    # FlagEmbedding 1.3.x: lexical_weights keys may be strings or ints
                     sparse = {int(k): float(v) for k, v in sparse_weights.items()}
                     results.append(EmbeddingResult(
                         dense=dense,
@@ -89,7 +95,6 @@ class BGEEmbedder:
                     ))
             except Exception as e:
                 logger.error("Embedding batch failed", error=str(e), batch_size=len(batch))
-                # Return zero vectors as fallback to not block pipeline
                 dim = settings.dense_vector_size
                 for _ in batch:
                     results.append(EmbeddingResult(

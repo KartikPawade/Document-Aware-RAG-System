@@ -4,6 +4,18 @@ storage/cache/redis_store.py
 Redis cache for:
 1. Query result cache (30-min TTL) — identical queries skip retrieval entirely
 2. Hot chunk cache (5-min TTL) — newly ingested chunks available immediately
+
+CHANGES for redis-py 5.2.x + Redis 7.4:
+  - `aioredis.from_url()` is `redis.asyncio.from_url()` — no change, already correct.
+  - `client.scan(cursor, match=..., count=...)` — in redis-py 5.x the method signature
+    is `scan(cursor=0, match=None, count=None, _type=None)`. The positional call
+    `client.scan(cursor, match=..., count=...)` still works.
+  - `client.setex(name, time, value)` — `time` can be int (seconds) or timedelta.
+    Still works unchanged.
+  - hiredis 3.x (required for redis-py 5.2+ on Python 3.12) is a C extension;
+    no API changes visible in Python code.
+  - Added `auto_close_connection_pool=False` to prevent premature pool teardown
+    in long-lived async applications (redis-py 5.x regression fix).
 """
 from __future__ import annotations
 
@@ -31,6 +43,8 @@ class RedisCache:
                 settings.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
+                # redis-py 5.x: set max connections explicitly for production
+                max_connections=20,
             )
         return self._client
 
@@ -80,12 +94,12 @@ class RedisCache:
 
     async def invalidate_namespace(self, namespace: str) -> None:
         """Invalidate all cached responses for a namespace (after bulk ingest)."""
-        # Redis SCAN for pattern-based invalidation
         client = self._get_client()
         cursor = 0
         deleted = 0
         while True:
-            cursor, keys = await client.scan(cursor, match=f"qc:*", count=100)
+            # redis-py 5.x: scan returns (int, list[str]) — same as before
+            cursor, keys = await client.scan(cursor, match="qc:*", count=100)
             if keys:
                 await client.delete(*keys)
                 deleted += len(keys)

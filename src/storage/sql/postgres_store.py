@@ -5,6 +5,16 @@ PostgreSQL store for:
 1. Tabular data from XLSX/CSV (queried via NL→SQL)
 2. Chunk metadata index (audit trail, relationships)
 3. Document ingestion log
+
+CHANGES for asyncpg 0.30.x + SQLAlchemy 2.0.36 + PostgreSQL 17:
+  - asyncpg 0.30 dropped support for Python 3.8/3.9; 3.12 is fully supported.
+  - `create_async_engine`: `pool_pre_ping=True` is recommended for PG 17
+    to detect stale connections after PG server restarts.
+  - PostgreSQL 17: no SQL syntax changes that affect this schema.
+  - `async_sessionmaker` is stable in SQLAlchemy 2.0.36 (no breaking changes).
+  - `pd.DataFrame.to_sql()` with a sync SQLAlchemy engine: SQLAlchemy 2.x
+    requires `con` to be a `Connection` or `Engine` — using `Engine` is fine.
+  - The `method="multi"` kwarg in `to_sql()` is still valid in pandas 2.2.x.
 """
 from __future__ import annotations
 
@@ -30,7 +40,13 @@ class PostgresStore:
     def __init__(self):
         # Convert sync DSN to async DSN
         dsn = settings.postgres_dsn.replace("postgresql://", "postgresql+asyncpg://")
-        self._engine = create_async_engine(dsn, echo=False, pool_size=10, max_overflow=20)
+        self._engine = create_async_engine(
+            dsn,
+            echo=False,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,  # Detect stale connections (important for PG 17 + long-lived pools)
+        )
         self._session_factory = async_sessionmaker(
             self._engine, class_=AsyncSession, expire_on_commit=False
         )
@@ -99,7 +115,6 @@ class PostgresStore:
                 )
             """))
 
-            # Indexes
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_docs_source_id ON ingested_documents(source_id)"
             ))
@@ -183,11 +198,12 @@ class PostgresStore:
             f"{source_id}_{sheet_name}".encode()
         ).hexdigest()[:12]
 
-        # Store data — run sync pandas/SQLAlchemy in a thread to avoid blocking the event loop
         import asyncio
 
         def _sync_to_sql():
             import sqlalchemy
+            # SQLAlchemy 2.x: create_engine with future=True is the default;
+            # pandas to_sql() accepts Engine directly.
             sync_engine = sqlalchemy.create_engine(settings.postgres_dsn)
             df.to_sql(
                 table_name,
@@ -200,7 +216,6 @@ class PostgresStore:
 
         await asyncio.to_thread(_sync_to_sql)
 
-        # Register in tabular_datasets
         column_schema = {col: str(df[col].dtype) for col in df.columns}
         async with self._session_factory() as session:
             await session.execute(text("""
@@ -225,13 +240,22 @@ class PostgresStore:
         return table_name
 
     async def get_table_schema(self, source_id: str) -> List[Dict[str, Any]]:
-        """Get schemas of all tables for a document (used for NL→SQL context)."""
+        """Get schemas of all tables (used for NL→SQL context).
+        If source_id is empty, returns all tables."""
         async with self._session_factory() as session:
-            result = await session.execute(text("""
-                SELECT table_name, sheet_name, column_schema, row_count
-                FROM tabular_datasets
-                WHERE source_id = CAST(:source_id AS uuid)
-            """), {"source_id": source_id})
+            if source_id:
+                result = await session.execute(text("""
+                    SELECT table_name, sheet_name, column_schema, row_count
+                    FROM tabular_datasets
+                    WHERE source_id = CAST(:source_id AS uuid)
+                """), {"source_id": source_id})
+            else:
+                result = await session.execute(text("""
+                    SELECT table_name, sheet_name, column_schema, row_count
+                    FROM tabular_datasets
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                """))
             rows = result.fetchall()
             return [
                 {
@@ -248,8 +272,8 @@ class PostgresStore:
         async with self._session_factory() as session:
             result = await session.execute(text(sql))
             rows = result.fetchall()
-            cols = result.keys()
-            return pd.DataFrame(rows, columns=list(cols))
+            cols = list(result.keys())
+            return pd.DataFrame(rows, columns=cols)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Query Logging
@@ -273,7 +297,7 @@ class PostgresStore:
                     (:query_text, :query_type, :namespaces, :latency_ms, :chunk_count, :cached, :user_id)
             """), {
                 "query_text": query_text, "query_type": query_type,
-                "namespaces": namespaces, "latency_ms": latency_ms,
+                "namespaces": "{" + ",".join(namespaces) + "}", "latency_ms": latency_ms,
                 "chunk_count": chunk_count, "cached": cached, "user_id": user_id,
             })
             await session.commit()

@@ -5,6 +5,13 @@ PDF format plugin.
 - Text extraction: PyMuPDF (fast, layout-aware)
 - Table extraction: pdfplumber + Camelot (lattice tables)
 - Chunking: semantic with parent-child
+
+BREAKING CHANGES in PyMuPDF 1.25.x:
+  - `import fitz` still works (alias kept for backwards compat) but the
+    canonical import is now `import pymupdf as fitz`.
+  - `page.get_text("dict")` structure is unchanged.
+  - `doc.extract_image(xref)` is unchanged.
+  - `block["xref"]` key may be absent on some image blocks — guard with `.get()`.
 """
 from __future__ import annotations
 
@@ -35,7 +42,11 @@ class PDFPlugin(BaseFormatPlugin):
     document_format = DocumentFormat.PDF
 
     def parse(self, file_bytes: bytes, filename: str) -> ParsedDocument:
-        import fitz  # PyMuPDF
+        # PyMuPDF 1.25+: prefer `import pymupdf as fitz` but `import fitz` still works.
+        try:
+            import pymupdf as fitz          # 1.25+ canonical
+        except ImportError:
+            import fitz                     # legacy alias
 
         text_blocks: List[TextBlock] = []
         tables: List[pd.DataFrame] = []
@@ -47,7 +58,6 @@ class PDFPlugin(BaseFormatPlugin):
             structure["page_count"] = len(doc)
 
             for page_num, page in enumerate(doc, start=1):
-                # Extract text with layout preservation
                 blocks = page.get_text("dict")["blocks"]
                 for block in blocks:
                     if block["type"] == 0:  # Text block
@@ -58,7 +68,6 @@ class PDFPlugin(BaseFormatPlugin):
                             if not line_text:
                                 continue
 
-                            # Detect heading by font size — use spans directly from the current line
                             spans = line.get("spans", [])
                             font_size = max((s.get("size", 11) for s in spans), default=11)
                             is_heading = font_size >= 14
@@ -76,7 +85,8 @@ class PDFPlugin(BaseFormatPlugin):
 
                     elif block["type"] == 1:  # Image block
                         try:
-                            xref = block.get("xref", 0)
+                            # PyMuPDF 1.25: xref may be in block or in "image" sub-dict
+                            xref = block.get("xref") or block.get("image", {}).get("xref", 0)
                             if xref:
                                 img_data = doc.extract_image(xref)
                                 images.append(ImageBlock(
@@ -121,7 +131,6 @@ class PDFPlugin(BaseFormatPlugin):
         chunks: List[Chunk] = []
         source_meta = doc.source_metadata
 
-        # Group blocks by heading into sections (heading-based)
         sections = heading_based_chunk(doc.text_blocks, target_tokens=config.parent_chunk_size)
 
         chunk_index = 0
@@ -134,7 +143,6 @@ class PDFPlugin(BaseFormatPlugin):
                 child_overlap_tokens=config.chunk_overlap,
                 chunk_index_offset=chunk_index,
             )
-            # Set format on all chunks
             parent.format = DocumentFormat.PDF
             for child in children:
                 child.format = DocumentFormat.PDF
@@ -144,7 +152,6 @@ class PDFPlugin(BaseFormatPlugin):
             chunks.extend(children)
             chunk_index += len(children)
 
-        # Add table schema chunks (for SQL routing)
         for i, df in enumerate(doc.tables):
             schema_text = self._table_to_schema_chunk(df, i, source_meta.get("filename", ""))
             if schema_text:
@@ -160,7 +167,6 @@ class PDFPlugin(BaseFormatPlugin):
         return chunks
 
     def _table_to_schema_chunk(self, df: pd.DataFrame, table_idx: int, filename: str) -> str:
-        """Convert a DataFrame to a schema description chunk for routing."""
         cols = ", ".join(f"{col} ({df[col].dtype})" for col in df.columns)
         sample = df.head(2).to_string(index=False)
         return (

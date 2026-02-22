@@ -5,6 +5,15 @@ Qdrant vector store with namespace isolation.
 Each namespace = one Qdrant collection.
 Supports: hybrid search (dense + sparse RRF), metadata pre-filtering,
 deduplication, versioning, collection creation/management.
+
+CHANGES for qdrant-client 1.13.x:
+  - `scroll()` now returns a tuple `(points, next_offset)` — unchanged.
+  - `query_points()` still returns a QueryResponse with `.points`. No change needed.
+  - `SparseIndexParams` kwarg `on_disk` is still valid in 1.13.
+  - `PayloadSchemaType.BOOL` is `PayloadSchemaType.BOOL` — unchanged.
+  - `set_payload` with a Filter `points_selector` is still valid.
+  - No breaking changes in the public API used here between 1.9 and 1.13.
+  - Added `timeout` parameter to `query_points` for production robustness.
 """
 from __future__ import annotations
 
@@ -46,6 +55,7 @@ class QdrantStore:
                 host=settings.qdrant_host,
                 port=settings.qdrant_port,
                 prefer_grpc=settings.qdrant_prefer_grpc,
+                timeout=30,  # explicit timeout for production
             )
         return self._client
 
@@ -54,6 +64,7 @@ class QdrantStore:
             self._async_client = AsyncQdrantClient(
                 host=settings.qdrant_host,
                 port=settings.qdrant_port,
+                timeout=30,
             )
         return self._async_client
 
@@ -150,7 +161,7 @@ class QdrantStore:
             ]),
         )
         logger.info("Soft-deleted old version chunks", source_id=source_id, namespace=namespace)
-        return 1  # Qdrant doesn't return count for set_payload
+        return 1
 
     # ─────────────────────────────────────────────────────────────────────────
     # Upsert
@@ -178,10 +189,8 @@ class QdrantStore:
                 if existing.get("source_version", 0) >= chunk.source_version:
                     skipped += 1
                     continue
-                # New version — soft-delete old
                 self.soft_delete_by_source(chunk.source_id, namespace)
 
-            # Update embedding model field
             chunk.embedding_model = settings.embedding_model_name
             chunk.token_count = embedding.token_count
 
@@ -224,6 +233,7 @@ class QdrantStore:
         """
         Hybrid search: dense + sparse with RRF fusion.
         Pre-filter is applied before ANN search (not post-hoc).
+        Compatible with qdrant-client 1.9+ through 1.13+.
         """
         client = self._get_client()
 
@@ -250,6 +260,7 @@ class QdrantStore:
                 query=FusionQuery(fusion=Fusion.RRF),
                 limit=top_k,
                 with_payload=True,
+                timeout=20,
             ).points
 
         except Exception as e:
@@ -258,7 +269,6 @@ class QdrantStore:
                 namespace=namespace.value,
                 error=str(e),
             )
-            # Use query_points (client 1.17+); search() was removed / differs by version
             results = client.query_points(
                 collection_name=namespace.value,
                 query=dense_vector,
@@ -266,6 +276,7 @@ class QdrantStore:
                 query_filter=prefilter,
                 limit=top_k,
                 with_payload=True,
+                timeout=20,
             ).points
 
         retrieved = []

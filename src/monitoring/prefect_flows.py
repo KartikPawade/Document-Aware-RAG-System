@@ -1,20 +1,25 @@
 """
 monitoring/prefect_flows.py
 ────────────────────────────
-Prefect flows for scheduled pipeline tasks:
+Prefect 3.x flows for scheduled pipeline tasks.
 - Weekly index compaction (HNSW defragmentation)
 - Nightly batch ingestion from MinIO
 - Daily RAGAS evaluation report
+
+BREAKING CHANGES from Prefect 2.x → 3.x:
+  - `from prefect.schedules import CronSchedule` is removed.
+    Use `cron=...` directly in .serve() / .deploy().
+  - `flow.serve(name=..., cron=...)` API is stable in 3.x.
+  - `task.submit()` returns a PrefectFuture that now requires `.result()` with
+    explicit `raise_on_failure` kwarg (unchanged from 2.x).
+  - `from prefect import flow, task` is the same in 3.x.
 """
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
-from pathlib import Path
 from typing import List
 
 from prefect import flow, task
-from prefect.schedules import CronSchedule
 
 from src.core.logging import get_logger, setup_logging
 from src.core.models import Namespace
@@ -78,10 +83,7 @@ async def batch_ingestion_flow(file_list: List[dict]):
     """Triggered manually or on schedule for bulk document ingestion."""
     setup_logging()
 
-    # Use Prefect task mapping — submit() returns PrefectFutures that Prefect manages
     futures = [ingest_single_file.submit(f) for f in file_list]
-
-    # Collect results (blocks until all tasks complete)
     results = [f.result(raise_on_failure=False) for f in futures]
 
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "completed")
@@ -131,11 +133,11 @@ async def daily_evaluation_flow():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Deploy Schedules
+# Deploy Schedules (Prefect 3.x API)
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Deploy flows with schedules
+    # Prefect 3.x: flow.serve() accepts cron= directly (no CronSchedule import needed)
     weekly_compaction_flow.serve(
         name="weekly-compaction",
         cron="0 2 * * 0",   # Sundays at 2 AM

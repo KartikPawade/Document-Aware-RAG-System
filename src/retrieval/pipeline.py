@@ -135,11 +135,14 @@ class RetrievalPipeline:
         latency_ms = (time.time() - start_time) * 1000
 
         # ── Cache the response ────────────────────────────────────────────────
-        await self.cache.cache_response(
+        # Only cache if we got a real answer
+        if answer and "I don't have relevant information" not in answer:
+            await self.cache.cache_response(
             user_query,
-            sorted(user_roles),  # Match the key used in cache check above
+            sorted(user_roles),
             {"answer": answer},
-        )
+            )
+    
 
         # ── Log query ─────────────────────────────────────────────────────────
         await self.pg.log_query(
@@ -202,6 +205,11 @@ class RetrievalPipeline:
         # Stage 4: Rerank
         reranked = self.reranker.rerank(query, expanded, top_n=settings.reranker_top_n)
 
+        reranked = [r for r in reranked if r.score > 0.05]  # remove irrelevant chunks
+        seen = set()
+        reranked = [r for r in reranked if not (r.chunk.chunk_id in seen or seen.add(r.chunk.chunk_id))]  # remove duplicates
+
+
         return None, reranked   # Answer generated separately
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -215,11 +223,10 @@ class RetrievalPipeline:
 
         # Execute NL→SQL
         sql_result = await self.nl_to_sql.execute(query, schema_context)
-        answer = sql_result   # SQL result is the answer context
 
-        # Generate final answer from SQL result
+        # Generate final answer from SQL result : pass sql_result as string context, not raw
         final_answer = await self._answer_chain.ainvoke({
-            "context": sql_result,
+            "context": str(sql_result),
             "question": query,
         })
         return final_answer, []

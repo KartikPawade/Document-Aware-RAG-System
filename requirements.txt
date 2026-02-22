@@ -11,106 +11,126 @@
 # ─────────────────────────────────────────────
 # Core Framework
 # ─────────────────────────────────────────────
-fastapi>=0.111.0,<0.116.0
-uvicorn[standard]>=0.29.0,<0.35.0
-pydantic>=2.7.0,<2.12.0
-pydantic-settings>=2.2.1,<2.8.0
+fastapi>=0.115.0,<0.116.0
+uvicorn[standard]>=0.34.0,<0.35.0
+pydantic>=2.10.0,<2.12.0
+pydantic-settings>=2.7.0,<2.8.0
 python-dotenv>=1.0.1,<2.0.0
 
 # ─────────────────────────────────────────────
 # LangChain (LCEL for LLM calls only)
 # ─────────────────────────────────────────────
-langchain>=0.2.1,<0.4.0
-langchain-openai>=0.1.7,<0.4.0
-langchain-community>=0.2.1,<0.4.0
-langchain-qdrant>=0.1.1,<0.3.0
+# langchain 0.3.x is stable and supports langchain-openai 0.3.x
+langchain>=0.3.0,<0.4.0
+langchain-openai>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0
+# langchain-qdrant 0.2.x is compatible with qdrant-client 1.13.x
+langchain-qdrant>=0.2.0,<0.3.0
 
 # ─────────────────────────────────────────────
 # LLM — OpenAI
 # ─────────────────────────────────────────────
-openai>=1.30.1,<2.0.0
+openai>=1.60.0,<2.0.0
 
 # ─────────────────────────────────────────────
 # Vector Database — Qdrant
+# qdrant-client 1.13.x is required for Qdrant server v1.13.x
+# FusionQuery / Prefetch / query_points API is stable in 1.9+
 # ─────────────────────────────────────────────
-qdrant-client>=1.9.1,<2.0.0
+qdrant-client==1.13.6
 
 # ─────────────────────────────────────────────
 # Embeddings — BGE-M3 (self-hosted)
-# torch 2.3.0 doesn't exist for Py3.12 Windows; use 2.5+
-# peft required by FlagEmbedding (flag_reranker) but not declared by the package
+# FlagEmbedding 1.3.x drops support for Python < 3.10 and adds
+# new model support. Pin to >=1.3.0 for bge-reranker-v2-m3 improvements.
 # ─────────────────────────────────────────────
-peft>=0.13.0
-FlagEmbedding>=1.2.10,<1.3.0
-torch>=2.5.0,<2.11.0
-transformers>=4.41.0,<4.53.0
-sentence-transformers>=3.0.0,<4.0.0
+peft>=0.14.0
+FlagEmbedding>=1.3.0,<1.4.0
+torch>=2.5.0,<2.7.0
+transformers>=4.48.0,<4.53.0
+sentence-transformers>=3.4.0,<4.0.0
 
 # ─────────────────────────────────────────────
 # SQL — PostgreSQL + DuckDB
+# asyncpg 0.30.x is required for Python 3.12 + PostgreSQL 17
+# sqlalchemy 2.0.x async is stable
+# duckdb 1.x is the stable major release (0.x is legacy)
 # ─────────────────────────────────────────────
-asyncpg>=0.29.0,<0.31.0
-sqlalchemy[asyncio]>=2.0.30,<2.1.0
-duckdb>=0.10.2,<2.0.0
-psycopg2-binary>=2.9.9,<3.0.0
+asyncpg>=0.30.0,<0.31.0
+sqlalchemy[asyncio]>=2.0.36,<2.1.0
+duckdb>=1.1.0,<2.0.0
+psycopg2-binary>=2.9.10,<3.0.0
 
 # ─────────────────────────────────────────────
 # Cache — Redis
+# redis-py 5.x supports Redis 7.4 LTS
+# hiredis 3.x is required for redis-py 5.x on Python 3.12
 # ─────────────────────────────────────────────
-redis[hiredis]>=5.0.4,<6.0.0
+redis[hiredis]>=5.2.0,<6.0.0
 
 # ─────────────────────────────────────────────
 # Message Queue — Kafka
+# aiokafka 0.11+ is compatible with Confluent cp-kafka 7.8.0
 # ─────────────────────────────────────────────
-aiokafka>=0.10.0,<0.13.0
+aiokafka>=0.11.0,<0.13.0
 
 # ─────────────────────────────────────────────
 # Object Store — MinIO / S3
+# minio 7.2.x Python SDK works with MinIO RELEASE.2025-02-07 server
+# The Python SDK version is independent of the server release tag.
 # ─────────────────────────────────────────────
-boto3>=1.34.101,<2.0.0
-minio>=7.2.7,<8.0.0
+boto3>=1.36.0,<2.0.0
+minio>=7.2.12,<8.0.0
 
 # ─────────────────────────────────────────────
 # Document Parsers
+# pymupdf 1.25+ has a new API (fitz namespace is deprecated → use pymupdf)
+# We pin >=1.24 to keep the fitz import working (1.24 keeps the fitz alias)
 # ─────────────────────────────────────────────
-pymupdf>=1.24.3,<1.27.0
-pdfplumber>=0.11.1,<0.12.0
-# camelot-py[cv]  <-- skip: opencv conflict on Windows; pdfplumber covers table extraction
-python-pptx>=0.6.23,<1.1.0
-openpyxl>=3.1.2,<3.2.0
-pandas>=2.2.2,<3.0.0
+pymupdf>=1.25.0,<1.27.0
+pdfplumber>=0.11.4,<0.12.0
+python-pptx>=1.0.2,<1.1.0
+openpyxl>=3.1.5,<3.2.0
+pandas>=2.2.3,<3.0.0
 markdown-it-py>=3.0.0,<4.0.0
 python-docx>=1.1.2,<2.0.0
 beautifulsoup4>=4.12.3,<5.0.0
 
 # ─────────────────────────────────────────────
 # NLP — Entity Extraction Fallback
+# spacy 3.8.x supports Python 3.12
 # ─────────────────────────────────────────────
-spacy>=3.7.4,<3.9.0
+spacy>=3.8.0,<3.9.0
 
 # ─────────────────────────────────────────────
 # Orchestration — Prefect
+# Prefect 3.x is the current major release.
+# Breaking changes from 2.x → 3.x: schedules API, flow.serve() signature changed.
+# See src/monitoring/prefect_flows.py for the updated flow code.
 # ─────────────────────────────────────────────
-prefect>=2.19.3,<3.0.0
+prefect>=3.1.0,<3.2.0
 
 # ─────────────────────────────────────────────
 # Monitoring — Prometheus
+# prometheus-fastapi-instrumentator 7.x is compatible with FastAPI 0.115+
+# and Prometheus client 0.21+
 # ─────────────────────────────────────────────
-prometheus-client>=0.20.0,<0.22.0
+prometheus-client>=0.21.0,<0.22.0
 prometheus-fastapi-instrumentator>=7.0.0,<8.0.0
 
 # ─────────────────────────────────────────────
 # Evaluation — RAGAS
+# ragas 0.2.x overhauled the evaluate() API — see ragas_evaluator.py for updated usage
 # ─────────────────────────────────────────────
-ragas>=0.1.9,<0.3.0
-datasets>=2.19.1,<3.0.0
+ragas>=0.2.0,<0.3.0
+datasets>=3.2.0,<4.0.0
 
 # ─────────────────────────────────────────────
 # Utilities
 # ─────────────────────────────────────────────
-tenacity>=8.3.0,<9.0.0
-structlog>=24.1.0,<25.0.0
-httpx>=0.27.0,<0.29.0
-python-multipart>=0.0.9,<0.0.20
-aiofiles>=23.2.1,<24.0.0
+tenacity>=9.0.0,<10.0.0
+structlog>=25.1.0,<26.0.0
+httpx>=0.28.0,<0.29.0
+python-multipart>=0.0.20,<0.0.21
+aiofiles>=24.1.0,<25.0.0
 numpy>=1.26.4,<2.0.0

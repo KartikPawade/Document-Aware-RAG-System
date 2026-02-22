@@ -3,7 +3,7 @@ services:
 
   # Qdrant - Latest Stable
   qdrant:
-    image: qdrant/qdrant:v1.12.0
+    image: qdrant/qdrant:v1.13.6
     container_name: rag_qdrant
     restart: unless-stopped
     ports:
@@ -11,10 +11,11 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+      - ./configs/qdrant.yaml:/qdrant/config/production.yaml
     networks:
       - rag_network
 
-  # PostgreSQL - Latest Stable Major Version
+  # PostgreSQL - Latest Stable
   postgres:
     image: postgres:17-alpine
     container_name: rag_postgres
@@ -27,12 +28,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - rag_network
 
   # MinIO - Latest Stable Release
+  # NOTE: RELEASE.2025-02-07T23-21-09Z changed healthcheck paths — updated below
   minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    image: minio/minio:RELEASE.2025-02-07T23-21-09Z
     container_name: rag_minio
     restart: unless-stopped
     ports:
@@ -46,8 +49,15 @@ services:
       - minio_data:/data
     networks:
       - rag_network
+    healthcheck:
+      # MinIO >=RELEASE.2023-xx switched /minio/health/live → /minio/health/cluster
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
 
-  # Redis - Latest Stable 7.4 (Redis 8 is still in community preview)
+  # Redis 7.4 LTS (Redis 8 is production-stable as of 2025 but has breaking changes
+  # in some client behavior; stay on 7.4 LTS unless you have tested redis-py>=5.2)
   redis:
     image: redis:7.4-alpine
     container_name: rag_redis
@@ -56,22 +66,32 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+      - ./configs/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
     networks:
       - rag_network
 
-  # Kafka & Zookeeper - Latest Confluent Stable
+  # ─── Kafka: Confluent 7.9.x dropped Zookeeper support in favour of KRaft ───
+  # cp-zookeeper is still present in 7.9 but deprecated and removed in 8.x.
+  # We keep 7.8 for the Zookeeper+Kafka pair so it's safe. If you want KRaft,
+  # see the KRaft-only example in the comments below.
   zookeeper:
     image: confluentinc/cp-zookeeper:7.8.0
     container_name: rag_zookeeper
+    restart: unless-stopped
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
     networks:
       - rag_network
 
   kafka:
     image: confluentinc/cp-kafka:7.8.0
     container_name: rag_kafka
+    restart: unless-stopped
     depends_on:
       - zookeeper
     ports:
@@ -83,29 +103,45 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka_data:/var/lib/kafka/data
     networks:
       - rag_network
 
-  # Prometheus - Latest Stable
+  # Prometheus 3.x — v3.0+ has a new UI and changed several default scrape labels.
+  # prometheus_fastapi_instrumentator>=7.0 emits metrics compatible with Prometheus 3.x.
   prometheus:
-    image: prom/prometheus:v3.0.1
+    image: prom/prometheus:v3.2.1
     container_name: rag_prometheus
+    restart: unless-stopped
     ports:
       - "9090:9090"
     volumes:
       - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
     networks:
       - rag_network
 
-  # Grafana - Latest Stable
+  # Grafana 11.x — GF_SECURITY_ADMIN_PASSWORD still works in 11.x
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:11.5.2
     container_name: rag_grafana
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
     networks:
       - rag_network
 
@@ -118,5 +154,8 @@ volumes:
   postgres_data:
   minio_data:
   redis_data:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
   prometheus_data:
   grafana_data:

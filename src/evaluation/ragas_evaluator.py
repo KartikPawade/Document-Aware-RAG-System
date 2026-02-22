@@ -6,11 +6,13 @@ Two modes:
 1. Offline: run against a test dataset (CI/CD regression gate)
 2. Online: sample 1% of production queries asynchronously
 
-Metrics evaluated:
-- Faithfulness: answer grounded in context (no hallucination)
-- Answer Relevancy: answer addresses the question
-- Context Precision: retrieved chunks are relevant
-- Context Recall: all needed chunks were retrieved
+BREAKING CHANGES in RAGAS 0.2.x vs 0.1.x:
+  - `from ragas import evaluate` now accepts an EvaluationDataset, not a
+    HuggingFace Dataset. Use `EvaluationDataset.from_list(...)`.
+  - Metric imports moved: `from ragas.metrics import Faithfulness` (class, not instance).
+  - evaluate() now uses `dataset=`, `metrics=[]` (list of metric instances), `llm=`, `embeddings=`.
+  - LangchainLLMWrapper / LangchainEmbeddingsWrapper are in `ragas.llms` / `ragas.embeddings`.
+  - result is an EvaluationResult; index with result["metric_name"] still works.
 """
 from __future__ import annotations
 
@@ -36,7 +38,7 @@ class EvaluationSample:
 
 class RAGASEvaluator:
     """
-    RAGAS-based evaluation.
+    RAGAS 0.2.x-based evaluation.
     Uses GPT-4o-mini as the judge LLM (same as the RAG system).
     """
 
@@ -45,13 +47,9 @@ class RAGASEvaluator:
 
     def _get_ragas_components(self):
         """Lazy import RAGAS to avoid startup overhead."""
-        from ragas import evaluate
-        from ragas.metrics import (
-            faithfulness,
-            answer_relevancy,
-            context_precision,
-            context_recall,
-        )
+        # RAGAS 0.2.x imports
+        from ragas import evaluate, EvaluationDataset
+        from ragas.metrics import Faithfulness, AnswerRelevancy, ContextPrecision, ContextRecall
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
         from ragas.llms import LangchainLLMWrapper
         from ragas.embeddings import LangchainEmbeddingsWrapper
@@ -60,35 +58,47 @@ class RAGASEvaluator:
             model=settings.openai_model,
             api_key=settings.openai_api_key,
         )
-        # Note: RAGAS needs embeddings for answer_relevancy
-        # We use OpenAI embeddings here since BGE-M3 requires custom wrapping
         embeddings = OpenAIEmbeddings(api_key=settings.openai_api_key)
 
-        # Base metrics — context_recall added per-sample only when ground_truth present
-        base_metrics = [faithfulness, answer_relevancy, context_precision]
+        # Instantiate metric objects (0.2.x uses classes, not module-level instances)
+        base_metrics = [Faithfulness(), AnswerRelevancy(), ContextPrecision()]
 
-        return evaluate, base_metrics, LangchainLLMWrapper(llm), LangchainEmbeddingsWrapper(embeddings)
+        return (
+            evaluate,
+            EvaluationDataset,
+            base_metrics,
+            ContextRecall,  # pass class so caller can instantiate conditionally
+            LangchainLLMWrapper(llm),
+            LangchainEmbeddingsWrapper(embeddings),
+        )
 
     async def evaluate_sample(self, sample: EvaluationSample) -> Dict[str, float]:
         """Evaluate a single query-answer pair."""
-        from datasets import Dataset
+        (
+            evaluate_fn,
+            EvaluationDataset,
+            base_metrics,
+            ContextRecallClass,
+            llm_wrapper,
+            embed_wrapper,
+        ) = self._get_ragas_components()
 
-        data = {
-            "question": [sample.question],
-            "answer": [sample.answer],
-            "contexts": [sample.contexts],
+        # RAGAS 0.2.x expects a list of dicts with specific keys
+        row = {
+            "user_input": sample.question,          # key changed from "question" in 0.2.x
+            "response": sample.answer,               # key changed from "answer" in 0.2.x
+            "retrieved_contexts": sample.contexts,   # key changed from "contexts" in 0.2.x
         }
-        evaluate_fn, base_metrics, llm_wrapper, embed_wrapper = self._get_ragas_components()
-        metrics = list(base_metrics)  # copy — don't mutate the returned list
+        metrics = list(base_metrics)
 
         if sample.ground_truth:
-            data["ground_truth"] = [sample.ground_truth]
-            metrics.append(context_recall)  # Only valid when ground_truth is present
+            row["reference"] = sample.ground_truth   # key changed from "ground_truth" in 0.2.x
+            metrics.append(ContextRecallClass())
 
-        dataset = Dataset.from_dict(data)
+        # Build EvaluationDataset (replaces datasets.Dataset in 0.2.x)
+        dataset = EvaluationDataset.from_list([row])
 
         try:
-
             result = evaluate_fn(
                 dataset=dataset,
                 metrics=metrics,
@@ -97,11 +107,13 @@ class RAGASEvaluator:
                 raise_exceptions=False,
             )
 
+            # result is an EvaluationResult; convert to DataFrame then extract row 0
+            result_df = result.to_pandas()
             scores = {
-                "faithfulness":      float(result.get("faithfulness", 0)),
-                "answer_relevancy":  float(result.get("answer_relevancy", 0)),
-                "context_precision": float(result.get("context_precision", 0)),
-                "context_recall":    float(result.get("context_recall", 0)),
+                "faithfulness":      float(result_df.get("faithfulness", [0]).iloc[0]) if "faithfulness" in result_df else 0.0,
+                "answer_relevancy":  float(result_df.get("answer_relevancy", [0]).iloc[0]) if "answer_relevancy" in result_df else 0.0,
+                "context_precision": float(result_df.get("context_precision", [0]).iloc[0]) if "context_precision" in result_df else 0.0,
+                "context_recall":    float(result_df.get("context_recall", [0]).iloc[0]) if "context_recall" in result_df else 0.0,
             }
 
             logger.info(
@@ -140,7 +152,6 @@ class RAGASEvaluator:
         if not all_scores:
             return {}
 
-        # Aggregate
         keys = all_scores[0].keys()
         return {
             k: round(sum(s[k] for s in all_scores) / len(all_scores), 4)
@@ -168,7 +179,6 @@ class RAGASEvaluator:
             answer=answer,
             contexts=contexts,
         )
-        # Fire and forget — don't await
         asyncio.create_task(self.evaluate_sample(sample))
 
 
@@ -183,7 +193,6 @@ async def run_offline_evaluation(
     """
     Load test dataset and run full RAGAS evaluation.
     Fails (raises) if any metric falls below fail_threshold.
-    Designed to run in CI/CD after deployment.
     """
     import json
     from src.retrieval.pipeline import RetrievalPipeline
@@ -211,7 +220,6 @@ async def run_offline_evaluation(
     scores = await evaluator.evaluate_batch(samples)
     logger.info("Offline evaluation complete", scores=scores)
 
-    # Assert quality gate
     for metric, score in scores.items():
         if score < fail_threshold:
             raise ValueError(
