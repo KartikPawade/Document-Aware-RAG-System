@@ -106,8 +106,8 @@ class RetrievalPipeline:
                 source_chunks=[],
                 query_plan=QueryPlan(
                     original_query=user_query,
-                    namespaces=[Namespace.GENERAL],
-                    query_type=QueryType.SEMANTIC,
+                    namespaces=[Namespace(ns) for ns in cached.get("namespaces", ["GENERAL"])],
+                    query_type=QueryType(cached.get("query_type", "semantic")),
                 ),
                 latency_ms=(time.time() - start_time) * 1000,
                 cached=True,
@@ -140,7 +140,11 @@ class RetrievalPipeline:
             await self.cache.cache_response(
             user_query,
             sorted(user_roles),
-            {"answer": answer},
+            {   
+                "answer": answer,
+                "query_type": plan.query_type.value,
+                "namespaces": [ns.value for ns in plan.namespaces],
+            },
             )
     
 
@@ -219,7 +223,7 @@ class RetrievalPipeline:
     async def _structured_path(self, query: str, plan: QueryPlan):
         # Get table schemas for context
         schemas = await self.pg.get_table_schema(source_id="")
-        schema_context = self._format_schema_context(schemas)
+        schema_context = await self._format_schema_context(schemas)
 
         # Execute NL→SQL
         sql_result = await self.nl_to_sql.execute(query, schema_context)
@@ -304,15 +308,27 @@ class RetrievalPipeline:
                 result.append(rc)
         return result
 
-    def _format_schema_context(self, schemas: List[dict]) -> str:
+    async def _format_schema_context(self, schemas: List[dict]) -> str:
         if not schemas:
             return "No tabular data available."
         parts = []
         for s in schemas:
             cols = ", ".join(f"{k} ({v})" for k, v in s["column_schema"].items())
+
+            limit = s["row_count"] if s["row_count"] <= 20 else 5
+            sample_rows = await self._get_sample_rows(table_name=s["table_name"], n=limit)
             parts.append(
                 f"Table: {s['table_name']} (from {s['sheet_name']})\n"
                 f"Columns: {cols}\n"
-                f"Row count: {s['row_count']}"
+                f"Row count: {s['row_count']}\n"
+                f"Sample data:\n{sample_rows}"
             )
         return "\n\n".join(parts)
+
+    async def _get_sample_rows(self, table_name: str, n: int = 5) -> str:
+        try:
+            df = await self.pg.execute_sql(f'SELECT * FROM "{table_name}" LIMIT {n}')
+            return df.to_string(index=False)
+        except Exception as e:
+            logger.warning("Failed to fetch sample rows", table=table_name, error=str(e))
+            return "Sample data unavailable"

@@ -194,6 +194,21 @@ class PostgresStore:
         Returns the table name for future SQL queries.
         """
         import hashlib
+
+        # Sanitize columns — pdfplumber can produce None or duplicate headers
+        sanitized = []
+        seen = {}
+        for i, col in enumerate(df.columns):
+            col = str(col).strip() if col is not None else f"col_{i}"
+            col = col if col else f"col_{i}"
+            if col in seen:
+                seen[col] += 1
+                col = f"{col}_{seen[col]}"
+            else:
+                seen[col] = 0
+            sanitized.append(col)
+        df.columns = sanitized
+
         table_name = "tbl_" + hashlib.md5(
             f"{source_id}_{sheet_name}".encode()
         ).hexdigest()[:12]
@@ -261,7 +276,11 @@ class PostgresStore:
                 {
                     "table_name": r[0],
                     "sheet_name": r[1],
-                    "column_schema": json.loads(r[2]) if r[2] else {},
+                    "column_schema": (
+                        r[2] if isinstance(r[2], dict)          # asyncpg returns dict natively
+                        else json.loads(r[2]) if r[2]           # fallback: parse string
+                        else {}
+                    ),
                     "row_count": r[3],
                 }
                 for r in rows
@@ -297,7 +316,7 @@ class PostgresStore:
                     (:query_text, :query_type, :namespaces, :latency_ms, :chunk_count, :cached, :user_id)
             """), {
                 "query_text": query_text, "query_type": query_type,
-                "namespaces": "{" + ",".join(namespaces) + "}", "latency_ms": latency_ms,
+                "namespaces": namespaces, "latency_ms": latency_ms,
                 "chunk_count": chunk_count, "cached": cached, "user_id": user_id,
             })
             await session.commit()

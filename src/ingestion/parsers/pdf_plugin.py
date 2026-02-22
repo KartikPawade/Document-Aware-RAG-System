@@ -116,12 +116,13 @@ class PDFPlugin(BaseFormatPlugin):
         try:
             import pdfplumber
             with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-                for page in pdf.pages:
-                    for table in page.extract_tables():
+                for page_idx, page in enumerate(pdf.pages):
+                    for table_idx, table in enumerate(page.extract_tables()):
                         if table and len(table) > 1:
                             df = pd.DataFrame(table[1:], columns=table[0])
                             df = df.dropna(how="all")
                             if not df.empty:
+                                df.attrs["sheet_name"] = f"page{page_idx + 1}_table{table_idx + 1}"
                                 tables.append(df)
         except Exception as e:
             logger.warning("Table extraction failed", filename=filename, error=str(e))
