@@ -159,12 +159,9 @@ async def health():
 @app.get("/namespaces")
 async def list_namespaces():
     """List all available namespaces with descriptions."""
-    return {
-        "namespaces": [
-            {"id": ns.value, "description": _ns_descriptions().get(ns.value, "")}
-            for ns in Namespace
-        ]
-    }
+    pg = get_postgres_store()
+    namespaces = await pg.get_namespace_context()
+    return {"namespaces": namespaces}
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -309,13 +306,3 @@ async def list_documents(
         }
 
 
-def _ns_descriptions() -> dict:
-    return {
-        "HR_EMPLOYEES": "Employee profiles, org charts, roles",
-        "HR_POLICIES": "Company policies, handbooks, PTO rules",
-        "FINANCE": "Budgets, forecasts, invoices",
-        "TECH_DOCS": "API docs, architecture, runbooks",
-        "LEGAL": "Contracts, NDAs, compliance",
-        "PRODUCTS": "Product specs, roadmaps, release notes",
-        "GENERAL": "General documents",
-    }

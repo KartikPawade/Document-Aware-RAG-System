@@ -20,6 +20,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from src.core.config import get_settings
 from src.core.logging import get_logger
 from src.core.models import Namespace, QueryPlan, QueryType
+from src.storage.sql.postgres_store import get_postgres_store
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -34,14 +35,8 @@ CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
 Analyze the user query and return a JSON object for routing decisions.
 Return ONLY valid JSON — no explanation, no markdown.
 
-Available namespaces:
-- HR_EMPLOYEES: employee profiles, org charts, roles, performance reviews
-- HR_POLICIES: company policies, handbooks, PTO rules, code of conduct
-- FINANCE: budgets, forecasts, invoices, financial reports
-- TECH_DOCS: API docs, architecture, runbooks, code documentation
-- LEGAL: contracts, NDAs, compliance, regulatory documents
-- PRODUCTS: product specs, roadmaps, release notes, user guides
-- GENERAL: anything that doesn't fit the above
+Available namespaces (in JSON format):
+{namespace_context}
 
 Query types:
 - "semantic": prose/conceptual queries → vector search
@@ -49,7 +44,7 @@ Query types:
 
 JSON schema:
 {{
-  "namespaces": ["<namespace>"],
+  "namespaces": ["<namespace value from the list above>"],
   "query_type": "semantic|structured",
   "entities": ["<named entity>"],
   "keywords": ["<keyword>"],
@@ -69,6 +64,7 @@ class QueryClassifier:
     """
 
     def __init__(self):
+        self._pg = get_postgres_store()
         llm = ChatOpenAI(
             model=settings.openai_model,
             temperature=0.0,
@@ -81,6 +77,12 @@ class QueryClassifier:
     async def classify(self, query: str, user_roles: List[str] = None) -> QueryPlan:
         """Classify a query and return a routing plan."""
         try:
+
+            namespaces_from_db = await self._pg.get_namespace_context()
+
+            # Serialize as JSON for the prompt — clear, unambiguous contract for LLM
+            namespace_context = json.dumps(namespaces_from_db, indent=2)
+
             result = await self._chain.ainvoke({"query": query})
 
             # Parse namespaces

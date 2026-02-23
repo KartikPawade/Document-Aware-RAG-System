@@ -6,6 +6,7 @@ intake → parse → chunk → enrich → embed → deduplicate → store
 """
 from __future__ import annotations
 
+import json
 import asyncio
 import io
 import traceback
@@ -262,23 +263,16 @@ class IngestionService:
 
         # ── Priority 3: LLM Classification ───────────────────────────────
         try:
-            
+            namespaces_from_db = await self.pg.get_namespace_context()
+            namespace_context = json.dumps(namespaces_from_db, indent=2)
 
             prompt = ChatPromptTemplate.from_messages([
                 ("system", """You are a document classifier for an enterprise RAG system.
     Given a document filename and sample content, classify it into exactly ONE namespace.
     Return ONLY a JSON object with one field — no explanation, no markdown.
 
-    Available namespaces:
-    - HR_EMPLOYEES: employee profiles, org charts, roles, performance data
-    - HR_POLICIES: company policies, handbooks, PTO rules, code of conduct
-    - FINANCE: budgets, forecasts, invoices, financial reports
-    - TECH_DOCS: API docs, architecture, runbooks, technical documentation,
-                deployment guides, infrastructure, security specs
-    - LEGAL: contracts, NDAs, compliance, regulatory documents
-    - PRODUCTS: product specs, pricing, features, roadmaps, release notes,
-                SLA policies, support tiers, product FAQs
-    - GENERAL: anything that doesn't clearly fit the above
+    Available namespaces (in JSON format):
+    {namespace_context}
 
     JSON schema: {{"namespace": "<namespace>"}}"""),
                 ("human", "{doc_context}"),
@@ -291,6 +285,8 @@ class IngestionService:
                 api_key=settings.openai_api_key,
             )
             chain = prompt | llm | JsonOutputParser()
+
+            
             result = await chain.ainvoke({"doc_context": doc_context})
 
             ns_value = result.get("namespace", "GENERAL")
@@ -343,7 +339,7 @@ class IngestionService:
         Listens to rag.ingestion.documents topic.
         """
         from aiokafka import AIOKafkaConsumer
-        import json
+        
 
         consumer = AIOKafkaConsumer(
             settings.kafka_topic_ingestion,

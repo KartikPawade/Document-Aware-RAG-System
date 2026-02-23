@@ -115,6 +115,54 @@ class PostgresStore:
                 )
             """))
 
+            # ── Namespace Descriptions ────────────────────────────────────
+            # Single source of truth for namespace descriptions.
+            # Used by all LLM prompts: classifier, ingestion service.
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS namespace_descriptions (
+                    namespace    TEXT PRIMARY KEY,
+                    description  TEXT NOT NULL,
+                    is_active    BOOLEAN DEFAULT TRUE,
+                    created_at   TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at   TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+
+            # Seed default namespace descriptions
+            # ON CONFLICT DO NOTHING — never overwrites manual updates
+            await conn.execute(text("""
+                INSERT INTO namespace_descriptions (namespace, description) VALUES
+                (
+                    'HR_EMPLOYEES',
+                    'Employee profiles, org charts, roles, seniority levels, performance reviews, salary bands, certifications, tech stacks per employee, team assignments, engineer data, staff headcount'
+                ),
+                (
+                    'HR_POLICIES',
+                    'Company policies, employee handbooks, PTO rules, code of conduct, leave policies, HR procedures, workplace guidelines, benefits documentation'
+                ),
+                (
+                    'FINANCE',
+                    'Budgets, financial forecasts, invoices, expense reports, financial statements, revenue data, cost analysis, profit and loss, accounting records'
+                ),
+                (
+                    'TECH_DOCS',
+                    'API documentation, system architecture, runbooks, deployment guides, infrastructure specs, security documentation, technical specifications, code documentation, developer guides'
+                ),
+                (
+                    'LEGAL',
+                    'Contracts, NDAs, compliance documents, regulatory filings, legal agreements, privacy policies, terms of service, intellectual property, legal correspondence'
+                ),
+                (
+                    'PRODUCTS',
+                    'Product specifications, pricing, feature lists, roadmaps, release notes, SLA policies, support tiers, product FAQs, deployment options, enterprise offerings, product comparisons'
+                ),
+                (
+                    'GENERAL',
+                    'General documents that do not clearly fit other categories, miscellaneous content, cross-domain documents'
+                )
+                ON CONFLICT (namespace) DO NOTHING
+            """))
+
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_docs_source_id ON ingested_documents(source_id)"
             ))
@@ -125,6 +173,36 @@ class PostgresStore:
                 "CREATE INDEX IF NOT EXISTS idx_tabular_source ON tabular_datasets(source_id)"
             ))
         logger.info("PostgreSQL tables initialized")
+
+
+
+    async def get_namespace_context(self) -> list[dict]:
+        """
+        Fetch all active namespace descriptions from DB.
+        Returns a list of dicts — callers serialize as needed for prompts.
+
+        Output:
+            [
+                {"namespace": "HR_EMPLOYEES", "description": "Employee profiles..."},
+                {"namespace": "HR_POLICIES",  "description": "Company policies..."},
+                ...
+            ]
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT namespace, description
+                FROM namespace_descriptions
+                WHERE is_active = TRUE
+                ORDER BY namespace
+            """))
+            rows = result.fetchall()
+            return [
+                {
+                    "namespace":   row[0],
+                    "description": row[1],
+                }
+                for row in rows
+            ]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Document Registry

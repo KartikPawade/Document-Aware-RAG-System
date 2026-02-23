@@ -75,13 +75,27 @@ class NLToSQLEngine:
 
             # Safety: strip markdown if LLM wrapped in backticks
             sql = self._sanitize_sql(sql)
-            logger.debug("Generated SQL", sql=sql[:200])
+            
+             # ── LOG 1: Generated SQL ──────────────────────────────────────
+            logger.info(
+                "SQL generated",
+                natural_language_query=query,
+                generated_sql=sql,          # ← full SQL
+            )
 
             if "NO_DATA" in sql:
                 return "No relevant data found in structured tables for this query."
 
             # Execute
             df = await self._pg.execute_sql(sql)
+
+            # ── LOG 2: Execution Result ───────────────────────────────────
+            logger.info(
+                "SQL executed successfully",
+                generated_sql=sql,
+                rows_returned=len(df),
+                columns=list(df.columns),
+            )
 
             if df.empty:
                 return "The query returned no results."

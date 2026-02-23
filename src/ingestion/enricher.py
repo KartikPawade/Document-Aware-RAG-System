@@ -18,7 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.core.config import get_settings
 from src.core.logging import get_logger
-from src.core.models import Chunk, Namespace
+from src.core.models import Chunk
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -32,10 +32,9 @@ ENRICHMENT_PROMPT = ChatPromptTemplate.from_messages([
 Analyze the provided document chunk and return a JSON object with exactly these fields.
 Return ONLY valid JSON — no explanation, no markdown, no extra text.
 
-Available namespaces: HR_EMPLOYEES, HR_POLICIES, FINANCE, TECH_DOCS, LEGAL, PRODUCTS, GENERAL
 
 JSON schema:
-{{
+{{ 
   "domain": "<business domain string>",
   "subdomain": "<specific subdomain>",
   "entities": ["<named entity>"],
