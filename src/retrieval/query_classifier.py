@@ -8,7 +8,7 @@ Uses LCEL: prompt | llm | JsonOutputParser()
 from __future__ import annotations
 
 from typing import List
-
+import json
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -83,7 +83,10 @@ class QueryClassifier:
             # Serialize as JSON for the prompt — clear, unambiguous contract for LLM
             namespace_context = json.dumps(namespaces_from_db, indent=2)
 
-            result = await self._chain.ainvoke({"query": query})
+            result = await self._chain.ainvoke({
+                "query": query,
+                "namespace_context": namespace_context,
+            })
 
             # Parse namespaces
             raw_namespaces = result.get("namespaces", ["GENERAL"])

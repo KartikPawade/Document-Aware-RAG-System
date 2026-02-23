@@ -287,7 +287,10 @@ class IngestionService:
             chain = prompt | llm | JsonOutputParser()
 
             
-            result = await chain.ainvoke({"doc_context": doc_context})
+            result = await chain.ainvoke({
+                "doc_context": doc_context,
+                "namespace_context": namespace_context,
+            })
 
             ns_value = result.get("namespace", "GENERAL")
             ns = Namespace(ns_value)
