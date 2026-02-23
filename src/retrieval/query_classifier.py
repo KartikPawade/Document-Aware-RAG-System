@@ -13,7 +13,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from qdrant_client.http.models import (
-    FieldCondition, Filter, MatchAny, MatchValue, Range,
+    FieldCondition, Filter, MatchAny, MatchValue, Range, MinShould,
 )
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -149,33 +149,21 @@ def build_prefilter(plan: QueryPlan, user_roles: List[str] = None) -> Filter:
     Build Qdrant pre-filter from a QueryPlan.
     Applied BEFORE ANN search — collapses the search space.
     """
-    conditions = []
+    must_conditions = [
+        FieldCondition(key="is_latest", match=MatchValue(value=True)), # Always: only latest chunk versions
+        FieldCondition(key="namespace", match=MatchAny(any=[ns.value for ns in plan.namespaces])), # Always: namespace isolation
+    ]
 
-    # Always: only latest chunk versions
-    conditions.append(
-        FieldCondition(key="is_latest", match=MatchValue(value=True))
-    )
-
-    # Always: namespace isolation (enforced by collection selection, but belt+suspenders)
-    conditions.append(
-        FieldCondition(key="namespace", match=MatchAny(any=[ns.value for ns in plan.namespaces]))
-    )
-
-    # Access control — hard filter
     if user_roles:
-        conditions.append(
+        must_conditions.append(
             FieldCondition(key="access_roles", match=MatchAny(any=user_roles))
         )
 
-    # Entity targeting — dramatically reduces search space for specific entity queries
-    if plan.entities:
-        conditions.append(
-            FieldCondition(key="entities", match=MatchAny(any=plan.entities))
-        )
+    
 
     # Language filter
     if plan.language and plan.language != "en":
-        conditions.append(
+        must_conditions.append(
             FieldCondition(key="language", match=MatchValue(value=plan.language))
         )
 
@@ -186,8 +174,28 @@ def build_prefilter(plan: QueryPlan, user_roles: List[str] = None) -> Filter:
             range_filter["gte"] = plan.date_range_start
         if plan.date_range_end:
             range_filter["lte"] = plan.date_range_end
-        conditions.append(
+        must_conditions.append(
             FieldCondition(key="doc_date", range=Range(**range_filter))
         )
 
-    return Filter(must=conditions)
+    # Build soft booster conditions only if entities/keywords exist
+    should_conditions = []
+    if plan.entities:
+        should_conditions.append(
+            FieldCondition(key="entities", match=MatchAny(any=plan.entities))
+        )
+    if plan.keywords:
+        should_conditions.append(
+            FieldCondition(key="keywords", match=MatchAny(any=plan.keywords))
+        )
+
+    min_should = (
+        MinShould(conditions=should_conditions, min_count=0)
+        if should_conditions
+        else None
+    )
+
+    return Filter(
+        must=must_conditions,
+        min_should=min_should,
+    )
