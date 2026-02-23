@@ -36,7 +36,6 @@ Available namespaces: HR_EMPLOYEES, HR_POLICIES, FINANCE, TECH_DOCS, LEGAL, PROD
 
 JSON schema:
 {{
-  "namespace": "<one of the available namespaces>",
   "domain": "<business domain string>",
   "subdomain": "<specific subdomain>",
   "entities": ["<named entity>"],
@@ -106,13 +105,7 @@ class MetadataEnricher:
         return await asyncio.gather(*tasks, return_exceptions=False)
 
     def _apply_enrichment(self, chunk: Chunk, result: Dict[str, Any]) -> None:
-        """Apply LLM enrichment result to chunk metadata."""
-        # Namespace
-        ns_value = result.get("namespace", "GENERAL")
-        try:
-            chunk.namespace = Namespace(ns_value)
-        except ValueError:
-            chunk.namespace = Namespace.GENERAL
+        """Apply LLM enrichment result to chunk metadata."""        
 
         chunk.domain    = result.get("domain", "")
         chunk.subdomain = result.get("subdomain", "")

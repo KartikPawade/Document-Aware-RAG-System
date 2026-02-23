@@ -24,6 +24,10 @@ from src.storage.sql.postgres_store import get_postgres_store
 from src.storage.vector.embedder import get_embedder
 from src.storage.vector.qdrant_store import get_qdrant_store
 
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+
 logger = get_logger(__name__)
 settings = get_settings()
 
@@ -78,12 +82,26 @@ class IngestionService:
                 "doc_date": doc_date,
             })
 
+            # ── Step 2.1: Resolve namespace ONCE for entire document ───────────
+            # Priority: explicit hint → LLM classification → GENERAL fallback
+            doc_namespace = await self._resolve_document_namespace(
+                doc=doc,
+                filename=filename,
+                namespace_hint=namespace_hint,
+            )
+            logger.info(
+                "Document namespace resolved",
+                filename=filename,
+                namespace=doc_namespace.value,
+                source=("hint" if namespace_hint else "llm"),
+            )
+
             # ── Step 3: Log document intake ───────────────────────────────────
             await self.pg.log_document(
                 source_id=source_id,
                 filename=filename,
                 fmt=doc.format.value,
-                namespace=namespace_hint or "GENERAL",
+                namespace=doc_namespace.value,
                 source_url=source_url,
                 doc_date=doc_date,
             )
@@ -102,11 +120,7 @@ class IngestionService:
                 chunk.source_url = source_url
                 chunk.doc_date = doc_date
                 chunk.access_roles = access_roles
-                if namespace_hint:
-                    try:
-                        chunk.namespace = Namespace(namespace_hint)
-                    except ValueError:
-                        pass
+                chunk.namespace = doc_namespace
 
             logger.info("Chunking complete", filename=filename, chunks=len(chunks))
 
@@ -155,7 +169,7 @@ class IngestionService:
                 "status": "completed",
                 "chunks_ingested": total_upserted,
                 "tables_stored": table_count,
-                "namespaces": [ns.value for ns in namespace_groups.keys()],
+                "namespaces": [doc_namespace.value],
                 "source_url": source_url,
             }
             logger.info("Ingestion complete", **result)
@@ -174,6 +188,138 @@ class IngestionService:
                 error=str(e),
             )
             raise
+
+    async def _resolve_document_namespace(
+        self,
+        doc: ParsedDocument,
+        filename: str,
+        namespace_hint: Optional[str] = None,
+    ) -> Namespace:
+        """
+        Resolve the namespace for an entire document — decided ONCE at ingestion.
+        
+        Priority:
+        1. Explicit namespace_hint from caller (highest trust)
+        2. LLM classification using document context
+        3. GENERAL fallback (if LLM fails)
+        """
+
+        # ── Priority 1: Explicit hint from API caller ─────────────────────
+        if namespace_hint:
+            try:
+                ns = Namespace(namespace_hint)
+                logger.info(
+                    "Namespace resolved from hint",
+                    filename=filename,
+                    namespace=ns.value,
+                )
+                return ns
+            except ValueError:
+                logger.warning(
+                    "Invalid namespace hint provided, falling back to LLM",
+                    hint=namespace_hint,
+                    filename=filename,
+                )
+
+        # ── Priority 2: Build document context safely ─────────────────────
+        # Different formats produce different ParsedDocument structures:
+        # - PDF, Markdown, TXT, PPTX → text_blocks populated, tables maybe
+        # - CSV, XLSX               → text_blocks EMPTY, tables populated
+        # We must handle both cases explicitly.
+
+        context_parts = [f"Filename: {filename}"]
+
+        # Text-based content (PDF, Markdown, TXT, PPTX)
+        if doc.text_blocks:
+            sample_text = "\n\n".join(
+                block.text for block in doc.text_blocks[:3]
+                if block.text.strip()          # skip empty blocks
+            )
+            if sample_text:
+                context_parts.append(f"Content sample:\n{sample_text[:1500]}")
+
+        # Tabular content (CSV, XLSX) — column names + sheet names are strong signal
+        if doc.tables:
+            for df in doc.tables[:2]:          # first 2 sheets max
+                sheet_name = df.attrs.get("sheet_name", "Sheet1")
+                col_names = ", ".join(str(c) for c in df.columns[:15])
+                sample_rows = df.head(2).to_string(index=False)
+                context_parts.append(
+                    f"Table sheet: {sheet_name}\n"
+                    f"Columns: {col_names}\n"
+                    f"Sample rows:\n{sample_rows}"
+                )
+
+        # Edge case: completely empty document (no text, no tables)
+        if len(context_parts) == 1:
+            logger.warning(
+                "Document has no extractable content, defaulting to GENERAL",
+                filename=filename,
+            )
+            return Namespace.GENERAL
+
+        doc_context = "\n\n".join(context_parts)
+
+        # ── Priority 3: LLM Classification ───────────────────────────────
+        try:
+            
+
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are a document classifier for an enterprise RAG system.
+    Given a document filename and sample content, classify it into exactly ONE namespace.
+    Return ONLY a JSON object with one field — no explanation, no markdown.
+
+    Available namespaces:
+    - HR_EMPLOYEES: employee profiles, org charts, roles, performance data
+    - HR_POLICIES: company policies, handbooks, PTO rules, code of conduct
+    - FINANCE: budgets, forecasts, invoices, financial reports
+    - TECH_DOCS: API docs, architecture, runbooks, technical documentation,
+                deployment guides, infrastructure, security specs
+    - LEGAL: contracts, NDAs, compliance, regulatory documents
+    - PRODUCTS: product specs, pricing, features, roadmaps, release notes,
+                SLA policies, support tiers, product FAQs
+    - GENERAL: anything that doesn't clearly fit the above
+
+    JSON schema: {{"namespace": "<namespace>"}}"""),
+                ("human", "{doc_context}"),
+            ])
+
+            # Use cheaper enrichment model — this is a simple classification task
+            llm = ChatOpenAI(
+                model=settings.openai_enrichment_model,
+                temperature=0.0,
+                api_key=settings.openai_api_key,
+            )
+            chain = prompt | llm | JsonOutputParser()
+            result = await chain.ainvoke({"doc_context": doc_context})
+
+            ns_value = result.get("namespace", "GENERAL")
+            ns = Namespace(ns_value)
+
+            logger.info(
+                "Namespace resolved via LLM",
+                filename=filename,
+                namespace=ns.value,
+            )
+            return ns
+
+        except ValueError as e:
+            # LLM returned an unrecognized namespace value
+            logger.warning(
+                "LLM returned invalid namespace, defaulting to GENERAL",
+                filename=filename,
+                error=str(e),
+            )
+            return Namespace.GENERAL
+
+        except Exception as e:
+            # LLM call failed entirely
+            logger.warning(
+                "Namespace LLM classification failed, defaulting to GENERAL",
+                filename=filename,
+                error=str(e),
+            )
+            return Namespace.GENERAL
 
     async def ingest_batch(self, files: List[dict]) -> List[dict]:
         """
