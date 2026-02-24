@@ -43,21 +43,46 @@ settings = get_settings()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Answer Generation Prompt — LCEL
+# Answer Generation Prompts — LCEL
 # ─────────────────────────────────────────────────────────────────────────────
 
 ANSWER_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a helpful enterprise assistant. Answer the user's question
-using ONLY the provided context. Be precise and factual.
+using the provided context. Be precise and factual.
 
 Rules:
-- If the context doesn't contain the answer, say "I don't have relevant information to answer this."
-- Never fabricate information not present in the context
-- Cite the source section when helpful (e.g., "According to the HR Policies document...")
-- Be concise but complete
+- Use the context to answer even if the user's query has minor spelling mistakes,
+  typos, or capitalisation differences — match by meaning and intent, not exact text.
+- If the context is clearly about the topic the user is asking about, answer from it.
+- Only say "I don't have relevant information to answer this." if the context is
+  genuinely unrelated to the question — not just because of a typo or phrasing difference.
+- Never fabricate information not present in the context.
+- Cite the source section when helpful (e.g., "According to the HR Policies document...").
+- Be concise but complete.
 
 Context:
 {context}"""),
+    ("human", "{question}"),
+])
+
+
+SQL_ANSWER_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a helpful enterprise data assistant.
+You have been given the result of a SQL query that was run against a structured database.
+Your job is to answer the user's question directly and clearly using this data.
+
+Rules:
+- Always answer directly from the data provided — never say you don't have information.
+- The data is the ground truth; trust it completely.
+- For counts or single numbers, state the number plainly in a natural sentence.
+- For tabular results, summarise concisely and present the data in a readable way.
+- Be concise but complete.
+
+SQL Query Result:
+{sql_result}""",
+    ),
     ("human", "{question}"),
 ])
 
@@ -108,8 +133,9 @@ class RetrievalPipeline:
             temperature=0.0,
             api_key=settings.openai_api_key,
         )
-        # LCEL answer generation chain
-        self._answer_chain = ANSWER_PROMPT | llm | StrOutputParser()
+        # LCEL answer generation chains
+        self._answer_chain     = ANSWER_PROMPT     | llm | StrOutputParser()
+        self._sql_answer_chain = SQL_ANSWER_PROMPT | llm | StrOutputParser()
 
     async def query(
         self,
@@ -259,6 +285,10 @@ class RetrievalPipeline:
         """
         SQL-only path: fetch schema registry → build focused context →
         NL→SQL → execute → generate answer.
+
+        Uses SQL_ANSWER_PROMPT (not ANSWER_PROMPT) so the LLM is instructed
+        to always answer from the SQL result rather than triggering the
+        "I don't have relevant information" fallback designed for document RAG.
         """
         schema_registry = await self.pg.get_schema_registry()
         schema_context  = _build_schema_context_string(schema_registry)
@@ -274,10 +304,25 @@ class RetrievalPipeline:
             relevant_tables=relevant_tables,
         )
 
-        final_answer = await self._answer_chain.ainvoke({
-            "context":  f"--- Data from SQL ---\n{sql_result}",
-            "question": query,
+        # Guard: if NL→SQL returned a sentinel, pass it through without calling LLM
+        if (
+            sql_result.startswith("No relevant data")
+            or sql_result.startswith("Structured data lookup failed")
+        ):
+            return sql_result, []
+
+        # Use SQL-specific answer chain — never refuses to answer structured data
+        final_answer = await self._sql_answer_chain.ainvoke({
+            "sql_result": sql_result,
+            "question":   query,
         })
+
+        logger.info(
+            "Structured path complete",
+            query=query[:60],
+            sql_result_preview=sql_result[:120],
+        )
+
         return final_answer, []
 
     # ─────────────────────────────────────────────────────────────────────────

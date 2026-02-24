@@ -229,6 +229,46 @@ class PostgresStore:
                 for row in rows
             ]
 
+    async def append_to_namespace_description(
+        self,
+        namespace: str,
+        snippet: str,
+    ) -> None:
+        """
+        Append a document summary snippet to an existing namespace description.
+
+        The snippet is separated from the existing description by " | " so that
+        the description stays readable as a growing list of document summaries
+        that were indexed into this namespace.
+
+        Example before:  "Employee profiles, org charts, roles..."
+        Example snippet: "2024 Q3 headcount report for APAC engineering teams"
+        Example after:   "Employee profiles, org charts, roles... | 2024 Q3 headcount
+                          report for APAC engineering teams"
+
+        Uses a safe SQL CONCAT to avoid overwriting — always appends.
+        If the namespace row doesn't exist (edge case), this is a no-op.
+        """
+        async with self._session_factory() as session:
+            await session.execute(
+                text("""
+                    UPDATE namespace_descriptions
+                    SET
+                        description = description || ' | ' || :snippet,
+                        updated_at  = NOW()
+                    WHERE namespace = :namespace
+                """),
+                {"namespace": namespace, "snippet": snippet},
+            )
+            await session.commit()
+
+        logger.info(
+            "Namespace description appended",
+            namespace=namespace,
+            snippet=snippet,
+        )
+
+
     # ─────────────────────────────────────────────────────────────────────────
     # Document Registry
     # ─────────────────────────────────────────────────────────────────────────

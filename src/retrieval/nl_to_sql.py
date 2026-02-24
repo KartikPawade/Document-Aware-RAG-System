@@ -37,6 +37,7 @@ NL_TO_SQL_PROMPT = ChatPromptTemplate.from_messages([
 Rules:
 - Only generate SELECT statements — never INSERT, UPDATE, DELETE, DROP, or any DDL
 - Use exact column names from the schema provided
+- CRITICAL: Always wrap EVERY column name and table name in double quotes
 - Use ILIKE for case-insensitive text matching
 - If the query cannot be answered from the schema, return: SELECT 'NO_DATA' AS result
 - Return ONLY the SQL statement — no explanation, no markdown, no backticks
@@ -168,9 +169,17 @@ class NLToSQLEngine:
     def _format_result(self, df: pd.DataFrame, original_query: str) -> str:
         """Format DataFrame as readable context for the final LLM."""
         if len(df) == 1 and len(df.columns) == 1:
-            # Single value result — e.g. COUNT(*), SUM(revenue)
-            return f"Result: {df.iloc[0, 0]}"
+            # Single scalar — e.g. COUNT(*), SUM(revenue)
+            col_name = df.columns[0]
+            value = df.iloc[0, 0]
+            return (
+                f"SQL query result for: {original_query}\n"
+                f"{col_name}: {value}"
+            )
 
-        # Multi-row or multi-column result
+        # Multi-row or multi-column result — cap at 20 rows for context window
         rows = df.head(20).to_string(index=False)
-        return f"Query results ({len(df)} rows):\n\n{rows}"
+        total = len(df)
+        shown = min(total, 20)
+        suffix = f"\n(Showing {shown} of {total} rows)" if total > 20 else ""
+        return f"SQL query results for: {original_query}\n\n{rows}{suffix}"

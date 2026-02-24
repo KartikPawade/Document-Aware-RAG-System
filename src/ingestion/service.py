@@ -36,6 +36,7 @@ from src.storage.object.minio_store import get_minio_store
 from src.storage.sql.postgres_store import get_postgres_store
 from src.storage.vector.embedder import get_embedder
 from src.storage.vector.qdrant_store import get_qdrant_store
+from src.ingestion.table_describer import get_table_describer
 
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -63,6 +64,7 @@ class IngestionService:
             parent_chunk_size=settings.parent_chunk_size,
             chunk_overlap=settings.chunk_overlap,
         )
+        self.table_describer = get_table_describer()
 
     async def ingest_file(
         self,
@@ -132,14 +134,17 @@ class IngestionService:
 
                 # Build a human-readable description for the router prompt
                 col_names = list(df.columns)
-                col_preview = ", ".join(col_names[:8])
-                description = (
-                    f"{filename} — sheet '{sheet}'. "
-                    f"Contains {len(df)} rows with columns: {col_preview}"
-                    + (" and more." if len(col_names) > 8 else ".")
+
+                # Ask LLM to describe what this table contains (30-40 words,
+                # no column names). Falls back gracefully if LLM is unavailable.
+                description = await self.table_describer.describe(
+                    df=df,
+                    filename=filename,
+                    sheet_name=sheet,
                 )
 
-                # Register in schema_registry so router can discover this table
+                # Register in schema_registry so the router can discover this table.
+                # description is now LLM-generated — concise, domain-aware, column-free.
                 await self.pg.upsert_schema_registry(
                     table_name=table_name,
                     source=filename,
@@ -238,17 +243,23 @@ class IngestionService:
 
     async def _resolve_document_namespace(
         self,
-        doc: ParsedDocument,
+        doc: "ParsedDocument",
         filename: str,
         namespace_hint: Optional[str] = None,
-    ) -> Namespace:
+    ) -> "Namespace":
         """
         Resolve the namespace for an entire document — decided ONCE at ingestion.
 
         Priority:
-        1. Explicit namespace_hint from caller (highest trust)
-        2. LLM classification using document context
-        3. GENERAL fallback (if LLM fails)
+        1. Explicit namespace_hint from caller (highest trust — skip LLM)
+        2. LLM classification using document context  ← UPDATED
+            The LLM now returns TWO fields in one call:
+            • namespace   — which collection this document belongs to
+            • doc_summary — a ≤15-word summary of what the document contains
+            After the call, doc_summary is appended to the chosen namespace's
+            description in namespace_descriptions so that the query classifier
+            accumulates richer, document-aware context over time.
+        3. GENERAL fallback (if LLM call fails)
         """
 
         # ── Priority 1: Explicit hint from API caller ─────────────────────
@@ -263,24 +274,20 @@ class IngestionService:
                 return ns
             except ValueError:
                 logger.warning(
-                    "Invalid namespace hint provided, falling back to LLM",
+                    "Invalid namespace hint, falling back to LLM",
                     hint=namespace_hint,
                     filename=filename,
                 )
 
-        # ── Priority 2: Build document context safely ─────────────────────
-        # Different formats produce different ParsedDocument structures:
-        # - PDF, Markdown, TXT, PPTX → text_blocks populated, tables maybe
-        # - CSV, XLSX               → text_blocks EMPTY, tables populated
-        # We must handle both cases explicitly.
+        # ── Priority 2: LLM classification + doc_summary in one call ────
         try:
+            # Build document context (same logic as before)
             doc_context_parts = [f"Filename: {filename}"]
 
             if doc.text_blocks:
                 sample_text = " ".join(b.text for b in doc.text_blocks[:3])[:1500]
                 doc_context_parts.append(f"Content sample: {sample_text}")
             elif doc.tables:
-                # For pure tabular files, use column names as context signal
                 for df in doc.tables[:2]:
                     sheet = df.attrs.get("sheet_name", "sheet")
                     cols = ", ".join(str(c) for c in df.columns[:15])
@@ -288,59 +295,91 @@ class IngestionService:
 
             doc_context = "\n".join(doc_context_parts)
 
-            # Fetch namespace options from DB
+            # Fetch live namespace options from DB
             namespace_options = await self.pg.get_namespace_context()
             namespace_context = json.dumps(namespace_options, indent=2)
 
+            # ── Updated prompt: two-step reasoning, two output fields ─────
             prompt = ChatPromptTemplate.from_messages([
-                ("system", """Given a document filename and sample content, classify it into exactly ONE namespace.
-    Return ONLY a JSON object with one field — no explanation, no markdown.
+                (
+                    "system",
+                    """You are a document classifier for an enterprise RAG system.
 
-    Available namespaces (in JSON format):
-    {namespace_context}
+Given a document filename and a sample of its content, do TWO things:
 
-    JSON schema: {{"namespace": "<namespace>"}}"""),
+Step 1 — Classify the document into exactly ONE namespace from the list below.
+Step 2 — Write a very short summary (10 to 15 words maximum) describing what
+        this specific document contains. The summary must:
+        - Describe the document's subject matter and scope
+        - NOT start with "This document" or "A document"
+        - NOT repeat the filename
+        - Be factual and information-dense
+
+Return ONLY a JSON object with exactly two fields — no explanation, no markdown.
+
+Available namespaces:
+{namespace_context}
+
+JSON schema:
+{{
+"namespace": "<one namespace value from the list above>",
+"doc_summary": "<10-15 word factual summary of what this document contains>"
+}}""",
+                ),
                 ("human", "{doc_context}"),
             ])
 
-            # Use cheaper enrichment model — this is a simple classification task
             llm = ChatOpenAI(
-                model=settings.openai_enrichment_model,
+                model=settings.openai_model,
                 temperature=0.0,
                 api_key=settings.openai_api_key,
             )
             chain = prompt | llm | JsonOutputParser()
 
             result = await chain.ainvoke({
-                "doc_context": doc_context,
                 "namespace_context": namespace_context,
+                "doc_context":       doc_context,
             })
 
-            ns_value = result.get("namespace", "GENERAL")
-            ns = Namespace(ns_value)
+            # ── Parse namespace ───────────────────────────────────────────
+            raw_ns = result.get("namespace", "GENERAL")
+            try:
+                ns = Namespace(raw_ns)
+            except ValueError:
+                logger.warning(
+                    "LLM returned unknown namespace, falling back to GENERAL",
+                    raw=raw_ns,
+                    filename=filename,
+                )
+                ns = Namespace.GENERAL
 
-            logger.info(
-                "Namespace resolved via LLM",
-                filename=filename,
-                namespace=ns.value,
-            )
+            # ── Parse doc_summary and append to namespace description ─────
+            doc_summary = (result.get("doc_summary") or "").strip()
+
+            if doc_summary:
+                await self.pg.append_to_namespace_description(
+                    namespace=ns.value,
+                    snippet=doc_summary,
+                )
+                logger.info(
+                    "Namespace description updated with doc summary",
+                    namespace=ns.value,
+                    doc_summary=doc_summary,
+                    filename=filename,
+                )
+            else:
+                logger.warning(
+                    "LLM returned empty doc_summary, skipping namespace description update",
+                    filename=filename,
+                )
+
             return ns
 
-        except ValueError as e:
-            # LLM returned an unrecognized namespace value
-            logger.warning(
-                "LLM returned invalid namespace, defaulting to GENERAL",
+        except Exception as exc:
+            logger.error(
+                "Namespace LLM classification failed, falling back to GENERAL",
                 filename=filename,
-                error=str(e),
-            )
-            return Namespace.GENERAL
-
-        except Exception as e:
-            # LLM call failed entirely
-            logger.warning(
-                "Namespace LLM classification failed, defaulting to GENERAL",
-                filename=filename,
-                error=str(e),
+                error=str(exc),
             )
             return Namespace.GENERAL
 
