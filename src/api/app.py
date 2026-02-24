@@ -24,6 +24,7 @@ from prometheus_client import Counter, Histogram
 from src.core.config import get_settings
 from src.core.logging import get_logger, setup_logging
 from src.core.models import Namespace
+from src.evaluation.ragas_evaluator import RAGASEvaluator
 from src.ingestion.service import IngestionService
 from src.retrieval.pipeline import RetrievalPipeline
 from src.storage.sql.postgres_store import get_postgres_store
@@ -242,6 +243,19 @@ async def query(request: QueryRequest):
 
         for rc in response.source_chunks:
             RETRIEVAL_SCORE.observe(rc.score)
+
+        # Online RAGAS: sample a fraction of non-cached queries for evaluation
+        if not response.cached and response.source_chunks:
+            try:
+                evaluator = RAGASEvaluator()
+                contexts = [rc.chunk.text for rc in response.source_chunks]
+                await evaluator.maybe_evaluate_online(
+                    question=request.query,
+                    answer=response.answer,
+                    contexts=contexts,
+                )
+            except Exception as e:
+                logger.warning("RAGAS online evaluation skipped", error=str(e))
 
         return QueryResponse(
             answer=response.answer,

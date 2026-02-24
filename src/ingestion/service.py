@@ -3,6 +3,18 @@ ingestion/service.py
 ─────────────────────
 Main ingestion service — orchestrates the complete ingestion pipeline:
 intake → parse → chunk → enrich → embed → deduplicate → store
+
+Pipeline steps:
+  1. Upload raw file to MinIO
+  2. Format detection & parsing
+  2.1 Resolve namespace (hint → LLM → GENERAL)
+  3. Log document intake to PostgreSQL
+  4. Store tabular data to PostgreSQL + register in schema_registry
+  5. Chunking
+  6. LLM metadata enrichment
+  7. Embedding (BGE-M3 dense + sparse)
+  8. Namespace routing + upsert to Qdrant (with deduplication)
+  9. Update document status
 """
 from __future__ import annotations
 
@@ -16,7 +28,7 @@ from typing import List, Optional
 
 from src.core.config import get_settings
 from src.core.logging import get_logger
-from src.core.models import Chunk, DocumentFormat, Namespace, ParsedDocument
+from src.core.models import Chunk, ContentType, DocumentFormat, Namespace, ParsedDocument
 from src.ingestion.enricher import MetadataEnricher
 from src.ingestion.parsers.base import ChunkConfig, PluginRegistry
 from src.storage.cache.redis_store import get_redis_cache
@@ -107,15 +119,49 @@ class IngestionService:
                 doc_date=doc_date,
             )
 
-            # ── Step 4: Store tabular data in PostgreSQL ──────────────────────
+            # ── Step 4: Store tabular data in PostgreSQL + register schema ────
+            # All rows go directly to SQL. A schema_registry entry is created
+            # for each table so the query router knows exactly what's queryable.
             table_count = 0
             for i, df in enumerate(doc.tables):
                 sheet = df.attrs.get("sheet_name", f"table_{i}")
-                await self.pg.store_dataframe(df, source_id, filename, sheet)
+
+                # Store full data in PostgreSQL
+                table_name = await self.pg.store_dataframe(df, source_id, filename, sheet)
                 table_count += 1
+
+                # Build a human-readable description for the router prompt
+                col_names = list(df.columns)
+                col_preview = ", ".join(col_names[:8])
+                description = (
+                    f"{filename} — sheet '{sheet}'. "
+                    f"Contains {len(df)} rows with columns: {col_preview}"
+                    + (" and more." if len(col_names) > 8 else ".")
+                )
+
+                # Register in schema_registry so router can discover this table
+                await self.pg.upsert_schema_registry(
+                    table_name=table_name,
+                    source=filename,
+                    columns=col_names,
+                    description=description,
+                    row_count=len(df),
+                    type="structured",
+                )
 
             # ── Step 5: Chunking ──────────────────────────────────────────────
             chunks: List[Chunk] = plugin.chunk(doc, self.chunk_config)
+
+            # Strip TABLE_REF schema chunks for CSV/XLSX formats — the schema
+            # registry now handles routing; we don't need these in the vector store.
+            chunks = [
+                c for c in chunks
+                if not (
+                    c.content_type == ContentType.TABLE_REF
+                    and c.format in (DocumentFormat.CSV, DocumentFormat.XLSX)
+                )
+            ]
+
             for chunk in chunks:
                 chunk.source_id = source_id
                 chunk.source_url = source_url
@@ -198,7 +244,7 @@ class IngestionService:
     ) -> Namespace:
         """
         Resolve the namespace for an entire document — decided ONCE at ingestion.
-        
+
         Priority:
         1. Explicit namespace_hint from caller (highest trust)
         2. LLM classification using document context
@@ -227,48 +273,27 @@ class IngestionService:
         # - PDF, Markdown, TXT, PPTX → text_blocks populated, tables maybe
         # - CSV, XLSX               → text_blocks EMPTY, tables populated
         # We must handle both cases explicitly.
-
-        context_parts = [f"Filename: {filename}"]
-
-        # Text-based content (PDF, Markdown, TXT, PPTX)
-        if doc.text_blocks:
-            sample_text = "\n\n".join(
-                block.text for block in doc.text_blocks[:3]
-                if block.text.strip()          # skip empty blocks
-            )
-            if sample_text:
-                context_parts.append(f"Content sample:\n{sample_text[:1500]}")
-
-        # Tabular content (CSV, XLSX) — column names + sheet names are strong signal
-        if doc.tables:
-            for df in doc.tables[:2]:          # first 2 sheets max
-                sheet_name = df.attrs.get("sheet_name", "Sheet1")
-                col_names = ", ".join(str(c) for c in df.columns[:15])
-                sample_rows = df.head(2).to_string(index=False)
-                context_parts.append(
-                    f"Table sheet: {sheet_name}\n"
-                    f"Columns: {col_names}\n"
-                    f"Sample rows:\n{sample_rows}"
-                )
-
-        # Edge case: completely empty document (no text, no tables)
-        if len(context_parts) == 1:
-            logger.warning(
-                "Document has no extractable content, defaulting to GENERAL",
-                filename=filename,
-            )
-            return Namespace.GENERAL
-
-        doc_context = "\n\n".join(context_parts)
-
-        # ── Priority 3: LLM Classification ───────────────────────────────
         try:
-            namespaces_from_db = await self.pg.get_namespace_context()
-            namespace_context = json.dumps(namespaces_from_db, indent=2)
+            doc_context_parts = [f"Filename: {filename}"]
+
+            if doc.text_blocks:
+                sample_text = " ".join(b.text for b in doc.text_blocks[:3])[:1500]
+                doc_context_parts.append(f"Content sample: {sample_text}")
+            elif doc.tables:
+                # For pure tabular files, use column names as context signal
+                for df in doc.tables[:2]:
+                    sheet = df.attrs.get("sheet_name", "sheet")
+                    cols = ", ".join(str(c) for c in df.columns[:15])
+                    doc_context_parts.append(f"Table '{sheet}' columns: {cols}")
+
+            doc_context = "\n".join(doc_context_parts)
+
+            # Fetch namespace options from DB
+            namespace_options = await self.pg.get_namespace_context()
+            namespace_context = json.dumps(namespace_options, indent=2)
 
             prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are a document classifier for an enterprise RAG system.
-    Given a document filename and sample content, classify it into exactly ONE namespace.
+                ("system", """Given a document filename and sample content, classify it into exactly ONE namespace.
     Return ONLY a JSON object with one field — no explanation, no markdown.
 
     Available namespaces (in JSON format):
@@ -286,7 +311,6 @@ class IngestionService:
             )
             chain = prompt | llm | JsonOutputParser()
 
-            
             result = await chain.ainvoke({
                 "doc_context": doc_context,
                 "namespace_context": namespace_context,
@@ -342,7 +366,6 @@ class IngestionService:
         Listens to rag.ingestion.documents topic.
         """
         from aiokafka import AIOKafkaConsumer
-        
 
         consumer = AIOKafkaConsumer(
             settings.kafka_topic_ingestion,

@@ -5,6 +5,8 @@ PostgreSQL store for:
 1. Tabular data from XLSX/CSV (queried via NL→SQL)
 2. Chunk metadata index (audit trail, relationships)
 3. Document ingestion log
+4. Schema registry — live catalogue of every ingested tabular dataset,
+                     consumed by the query router at retrieval time
 
 CHANGES for asyncpg 0.30.x + SQLAlchemy 2.0.36 + PostgreSQL 17:
   - asyncpg 0.30 dropped support for Python 3.8/3.9; 3.12 is fully supported.
@@ -115,6 +117,24 @@ class PostgresStore:
                 )
             """))
 
+            # ── Schema Registry ───────────────────────────────────────────
+            # Live catalogue of every ingested CSV/XLSX table.
+            # Populated during ingestion (upsert_schema_registry).
+            # Consumed by the query router (get_schema_registry) at query time.
+            # table_name matches the actual PostgreSQL table created by store_dataframe().
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS schema_registry (
+                    table_name    TEXT PRIMARY KEY,
+                    source        TEXT NOT NULL,
+                    columns       JSONB NOT NULL,
+                    description   TEXT DEFAULT '',
+                    row_count     INTEGER DEFAULT 0,
+                    type          TEXT DEFAULT 'structured',
+                    created_at    TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at    TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+
             # ── Namespace Descriptions ────────────────────────────────────
             # Single source of truth for namespace descriptions.
             # Used by all LLM prompts: classifier, ingestion service.
@@ -172,9 +192,14 @@ class PostgresStore:
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_tabular_source ON tabular_datasets(source_id)"
             ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_schema_registry_source ON schema_registry(source)"
+            ))
         logger.info("PostgreSQL tables initialized")
 
-
+    # ─────────────────────────────────────────────────────────────────────────
+    # Namespace Context
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def get_namespace_context(self) -> list[dict]:
         """
@@ -363,6 +388,87 @@ class PostgresStore:
                 }
                 for r in rows
             ]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Schema Registry
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def upsert_schema_registry(
+        self,
+        table_name: str,
+        source: str,
+        columns: List[str],
+        description: str,
+        row_count: int,
+        type: str = "structured",
+    ) -> None:
+        """
+        Upsert a table entry into the schema_registry.
+        Called during ingestion immediately after store_dataframe() succeeds.
+
+        The router fetches this registry at query time to decide whether to
+        route to SQL, vector store, or both — and which specific tables to query.
+        """
+        async with self._session_factory() as session:
+            await session.execute(text("""
+                INSERT INTO schema_registry
+                    (table_name, source, columns, description, row_count, type, updated_at)
+                VALUES
+                    (:table_name, :source, :columns, :description, :row_count, :type, NOW())
+                ON CONFLICT (table_name) DO UPDATE SET
+                    source      = EXCLUDED.source,
+                    columns     = EXCLUDED.columns,
+                    description = EXCLUDED.description,
+                    row_count   = EXCLUDED.row_count,
+                    type        = EXCLUDED.type,
+                    updated_at  = NOW()
+            """), {
+                "table_name":  table_name,
+                "source":      source,
+                "columns":     json.dumps(columns),
+                "description": description,
+                "row_count":   row_count,
+                "type":        type,
+            })
+            await session.commit()
+        logger.info("Schema registry upserted", table_name=table_name, source=source)
+
+    async def get_schema_registry(self) -> Dict[str, Dict]:
+        """
+        Fetch the full schema registry from DB.
+        Returns a dict keyed by table_name — mirrors the structure
+        expected by the router prompt and NL→SQL engine.
+
+        Example output:
+            {
+                "tbl_abc123def456": {
+                    "source": "sales_2024.csv",
+                    "columns": ["date", "product", "region", "revenue", "units"],
+                    "description": "sales_2024.csv — sheet 'default'. Contains 1200 rows...",
+                    "row_count": 1200,
+                    "type": "structured",
+                }
+            }
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT table_name, source, columns, description, row_count, type
+                FROM schema_registry
+                ORDER BY updated_at DESC
+            """))
+            rows = result.fetchall()
+
+        registry = {}
+        for r in rows:
+            cols = r[2] if isinstance(r[2], list) else json.loads(r[2]) if r[2] else []
+            registry[r[0]] = {
+                "source":      r[1],
+                "columns":     cols,
+                "description": r[3] or "",
+                "row_count":   r[4] or 0,
+                "type":        r[5] or "structured",
+            }
+        return registry
 
     async def execute_sql(self, sql: str) -> pd.DataFrame:
         """Execute a SQL query and return results as DataFrame."""

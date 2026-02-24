@@ -11,9 +11,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
+from pydantic import BaseModel
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,38 +100,42 @@ class ParsedDocument:
     Tables go to SQL store. Text blocks go to vector store.
     """
     text_blocks: List[TextBlock]
-    tables: List[pd.DataFrame]             # Never embedded — goes to DuckDB/PG
+    tables: List[pd.DataFrame]             # Never embedded — goes to PostgreSQL
     images: List[ImageBlock]
     structure: Dict[str, Any]              # Headings, outline, slide titles, etc.
-    source_metadata: Dict[str, Any]        # filename, format, doc_date, author, etc.
+    source_metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def format(self) -> DocumentFormat:
         fmt = self.source_metadata.get("format", "unknown")
-        return DocumentFormat(fmt) if fmt in DocumentFormat._value2member_map_ else DocumentFormat.UNKNOWN
+        try:
+            return DocumentFormat(fmt)
+        except ValueError:
+            return DocumentFormat.UNKNOWN
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Chunk — Core Unit of Storage & Retrieval
+# Chunk — Core Unit of the Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Chunk:
     """
-    The atomic unit stored in the vector database.
-    A chunk = text content + rich metadata payload.
+    The atomic unit passed through: chunker → enricher → embedder → vector store.
+    All fields are optional except text — sensible defaults allow partial construction.
     """
-    # Content
     text: str
-    content_hash: str = field(init=False)
 
     # Identity
     chunk_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    parent_id: Optional[str] = None
+    parent_id: Optional[str] = None        # Links child chunk back to parent section
     source_id: str = ""
     source_url: str = ""
     source_version: int = 1
     is_latest: bool = True
+
+    # Content hash for deduplication
+    content_hash: str = field(init=False)
 
     # Classification
     namespace: Namespace = Namespace.GENERAL
@@ -139,7 +144,7 @@ class Chunk:
     format: DocumentFormat = DocumentFormat.UNKNOWN
     content_type: ContentType = ContentType.PROSE
 
-    # Structure
+    # Position
     page_number: Optional[int] = None
     slide_number: Optional[int] = None
     section_heading: Optional[str] = None
@@ -148,18 +153,22 @@ class Chunk:
 
     # Temporal
     doc_date: Optional[str] = None
-    ingested_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ingested_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    created_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
-    # LLM-enriched metadata (populated by MetadataEnricher)
+    # LLM-enriched metadata
     entities: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     summary: str = ""
     hypothetical_questions: List[str] = field(default_factory=list)
-
-    # Quality
     confidence_score: float = 1.0
     language: str = "en"
+
+    # Embedding metadata
     token_count: int = 0
     embedding_model: str = ""
 
@@ -170,7 +179,7 @@ class Chunk:
         self.content_hash = hashlib.sha256(self.text.encode()).hexdigest()
 
     def to_payload(self) -> Dict[str, Any]:
-        """Serialize to Qdrant payload dict."""
+        """Serialize to Qdrant point payload."""
         return {
             "chunk_id":               self.chunk_id,
             "parent_id":              self.parent_id,
@@ -222,6 +231,31 @@ class Chunk:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Route Decision — produced by QueryClassifier, consumed by RetrievalPipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RouteDecision(BaseModel):
+    """
+    Routing decision produced by the query classifier in a single LLM call.
+    Drives which execution paths the RetrievalPipeline runs.
+
+    destination:
+        SQL          → run NL→SQL against structured tables only
+        VECTOR_STORE → run hybrid vector search only
+        BOTH         → run both paths concurrently, merge contexts before generation
+
+    relevant_tables:
+        Populated when destination is SQL or BOTH.
+        Contains the exact table_name values from schema_registry that the
+        LLM identified as relevant. The NL→SQL engine uses this to build a
+        focused schema context rather than dumping every table into the prompt.
+    """
+    destination: Literal["SQL", "VECTOR_STORE", "BOTH"]
+    reasoning: str
+    relevant_tables: List[str] = []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Query Models
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -238,6 +272,8 @@ class QueryPlan:
     intent: str = ""
     language: str = "en"
     confidence: float = 1.0
+    # Route decision — set by QueryClassifier, consumed by RetrievalPipeline
+    route_decision: Optional[RouteDecision] = None
 
 
 @dataclass
