@@ -260,22 +260,34 @@ class RetrievalPipeline:
         all_candidates.sort(key=lambda x: x.score, reverse=True)
         all_candidates = self._deduplicate(all_candidates)[:top_k]
 
-        # Apply minimum similarity threshold
-        above_threshold = [c for c in all_candidates if c.score >= settings.min_similarity_score]
-        if not above_threshold:
-            logger.info("No chunks above similarity threshold", query=query[:60])
+        if not all_candidates:
+            logger.info("No candidates returned from hybrid search", query=query[:60])
             return "I don't have relevant information to answer this question.", []
 
         # Stage 3: Context Expansion (child → parent)
-        expanded = self._expand_to_parents(above_threshold, plan.namespaces[0])
+        # Expansion happens before reranking so the reranker scores full parent
+        # sections — richer context improves reranker precision on borderline queries.
+        expanded = self._expand_to_parents(all_candidates, plan.namespaces[0])
 
-        # Stage 4: Rerank
+        # Stage 4: Rerank — cross-encoder rescores all candidates jointly with query.
         reranked = self.reranker.rerank(query, expanded, top_n=settings.reranker_top_n)
-        reranked = [r for r in reranked if r.score > 0.05]
-        seen = set()
-        reranked = [r for r in reranked if not (r.chunk.chunk_id in seen or seen.add(r.chunk.chunk_id))]
 
-        return None, reranked   # Answer generated separately by _generate_answer
+        # Stage 5: Post-rerank threshold — gate on reranker score, not ANN score.
+        above_threshold = [r for r in reranked if r.score >= settings.min_similarity_score]
+
+        if not above_threshold:
+            logger.info(
+                "No chunks above similarity threshold after reranking",
+                query=query[:60],
+                top_reranker_score=reranked[0].score if reranked else 0.0,
+            )
+            return "I don't have relevant information to answer this question.", []
+
+        # Deduplicate by chunk_id (multiple parents may surface the same chunk)
+        seen = set()
+        final = [r for r in above_threshold if not (r.chunk.chunk_id in seen or seen.add(r.chunk.chunk_id))]
+
+        return None, final   # Answer generated separately by _generate_answer
 
     # ─────────────────────────────────────────────────────────────────────────
     # Structured Path (NL→SQL)

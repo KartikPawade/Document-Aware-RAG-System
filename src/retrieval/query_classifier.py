@@ -137,51 +137,74 @@ def build_schema_context(schema_registry: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Prefilter Builder (unchanged)
+# Prefilter Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_prefilter(plan: QueryPlan, user_roles: List[str]) -> Filter:
     """
     Build a Qdrant pre-filter from the QueryPlan + user roles.
     Applied before ANN search so it doesn't degrade recall.
-    """
-    conditions = []
 
-    # Access control — always applied
+    Two tiers:
+      must[]       — hard filters: chunk excluded if ANY of these fail.
+                     Only factual, non-semantic conditions belong here.
+      min_should[] — soft boost: optional conditions that improve precision
+                     when matched but never exclude a chunk if unmatched.
+                     min_count=0 means zero of these need to match —
+                     they act as ranking hints, not hard gates.
+    """
+    must_conditions = []
+    should_conditions = []
+
+    # ── MUST: Access control ──────────────────────────────────────────────
     if user_roles:
-        conditions.append(
+        must_conditions.append(
             FieldCondition(
                 key="access_roles",
                 match=MatchAny(any=user_roles),
             )
         )
 
-    # Only return latest version of each chunk
-    conditions.append(
+    # ── MUST: Latest version only ─────────────────────────────────────────
+    must_conditions.append(
         FieldCondition(key="is_latest", match=MatchValue(value=True))
     )
 
-    # Date range filter (if classifier extracted one)
+    # ── MUST: Date range — only when query explicitly targets a time period ─
     if plan.date_range_start or plan.date_range_end:
         date_range = {}
         if plan.date_range_start:
             date_range["gte"] = plan.date_range_start
         if plan.date_range_end:
             date_range["lte"] = plan.date_range_end
-        conditions.append(
+        must_conditions.append(
             FieldCondition(key="doc_date", range=Range(**date_range))
         )
 
-    # Entity filter — boost precision when specific entities are named
+    # ── SHOULD: Entity boost — soft signal, never a hard gate ────────────
+    # Entities are LLM-extracted proper nouns (TechFlow, Salesforce, AWS).
+    # They boost chunks mentioning the same entities as the query, but
+    # min_count=0 means chunks without matching entities are still returned.
+    # This preserves recall for queries like "mobile app" where no named
+    # entity exists in the stored entity list.
     if plan.entities:
-        conditions.append(
+        should_conditions.append(
             FieldCondition(
                 key="entities",
                 match=MatchAny(any=plan.entities),
             )
         )
 
-    return Filter(must=conditions) if conditions else None
+    min_should = (
+        MinShould(conditions=should_conditions, min_count=0)
+        if should_conditions
+        else None
+    )
+
+    return Filter(
+        must=must_conditions,
+        min_should=min_should,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
