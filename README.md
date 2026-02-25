@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡Document Aware AdvancedRAG System
+# ⚡Document Aware RAG System
 
 ### *Enterprise-grade Retrieval-Augmented Generation — Designed for production.*
 
