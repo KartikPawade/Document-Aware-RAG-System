@@ -1,0 +1,342 @@
+[
+    {
+      "id": "SQL-001",
+      "query": "Count of employees with Bachelors education with zero years of experience in current domain",
+      "ground_truth": "There are 304 employees with a Bachelor's education who have zero years of experience in their current domain.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-002",
+      "query": "Top 5 employees with Bachelors education with 0 years of experience in current domain",
+      "ground_truth": "The first 5 employees with a Bachelor's education and 0 years of experience include: (1) Male, age 34, joined 2017, Bangalore; (2) Male, age 22, joined 2016, Bangalore; (3) Male, age 38, joined 2015, New Delhi; (4) Female, age 30, joined 2015, Pune; (5) Female, age 22, joined 2016, New Delhi.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "top_n",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-003",
+      "query": "How many employees have a Masters degree?",
+      "ground_truth": "There are 873 employees with a Masters degree.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-004",
+      "query": "How many employees are based in Bangalore?",
+      "ground_truth": "There are 2228 employees based in Bangalore.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-005",
+      "query": "What is the average age of employees?",
+      "ground_truth": "The average age of employees is approximately 29.39 years.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-006",
+      "query": "How many employees have ever been benched?",
+      "ground_truth": "478 employees have been benched at some point (EverBenched = Yes).",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-007",
+      "query": "How many employees with a Masters degree are in Payment Tier 3?",
+      "ground_truth": "There are 462 employees with a Masters degree in Payment Tier 3.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "filter_aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-008",
+      "query": "How many employees with Bachelors education are in Bangalore?",
+      "ground_truth": "There are 2052 employees with a Bachelor's education based in Bangalore.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "filter_aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-009",
+      "query": "How many employees are likely to leave (LeaveOrNot = 1)?",
+      "ground_truth": "1600 employees are marked as likely to leave (LeaveOrNot = 1).",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "aggregation",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "SQL-010",
+      "query": "What is the gender distribution of employees?",
+      "ground_truth": "The workforce consists of 2778 male employees and 1875 female employees.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "distribution",
+      "source_file": "Employee.csv"
+    },
+    {
+      "id": "ENG-001",
+      "query": "Which team is Aisha Okonkwo working in?",
+      "ground_truth": "Aisha Okonkwo works in the AI/ML team as a Data Scientist at Staff level, based in Lagos.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-002",
+      "query": "Who is the manager of Rahul Desai?",
+      "ground_truth": "Rahul Desai's manager is Priya Nair.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-003",
+      "query": "List all engineers in the AI/ML team",
+      "ground_truth": "The AI/ML team consists of: Emily Carter (ML Engineer, Staff), Chen Wei (ML Engineer, Mid), and Aisha Okonkwo (Data Scientist, Staff).",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "filter_lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-004",
+      "query": "What is Emily Carter's tech stack?",
+      "ground_truth": "Emily Carter's tech stack includes Python, PyTorch, HuggingFace, Qdrant, and LangChain. She is an ML Engineer at Staff level in the AI/ML team.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-005",
+      "query": "Who reports to Priya Nair?",
+      "ground_truth": "The following engineers report to Priya Nair: Arjun Mehta, Rahul Desai, Lucas Fernandez, James O'Brien, and Tom Harrington.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "filter_lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-006",
+      "query": "Which engineers are based in Pune?",
+      "ground_truth": "Engineers based in Pune include: Arjun Mehta, Rahul Desai, Priya Nair, Sneha Kulkarni, Neha Joshi, Vikram Shah, and Rohan Kapoor.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "filter_lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-007",
+      "query": "What certifications does Rahul Desai have?",
+      "ground_truth": "Rahul Desai holds the following certifications: CKA (Certified Kubernetes Administrator), AWS DevOps Pro, and Terraform Associate.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "ENG-008",
+      "query": "Who is the VP of Engineering?",
+      "ground_truth": "Vikram Shah is the VP of Engineering. He joined on January 10, 2015, is based in Pune, and holds an L9 salary band with a performance rating of 4.9.",
+      "query_type": "structured",
+      "expected_destination": "SQL",
+      "namespace": "HR_EMPLOYEES",
+      "category": "lookup",
+      "source_file": "engineering_data.csv"
+    },
+    {
+      "id": "HR-001",
+      "query": "How many days of parental leave does a primary caregiver get?",
+      "ground_truth": "Primary caregivers are entitled to 16 weeks of paid parental leave, available after 12 months of tenure.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "policy_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-002",
+      "query": "What is the remote work policy?",
+      "ground_truth": "Eligible employees may work remotely up to two days per week, subject to role requirements and manager approval. Remote work arrangements must be documented via the HR portal. Remote employees must be available during core hours from 10 AM to 3 PM and maintain the same performance standards as in-office work.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "policy_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-003",
+      "query": "What is the overtime pay rate?",
+      "ground_truth": "Non-exempt employees who work more than 40 hours in a workweek are compensated at 1.5 times their regular hourly rate, in accordance with the Fair Labor Standards Act (FLSA). Overtime must be pre-approved by a manager. Exempt employees are not eligible for overtime pay.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "policy_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-004",
+      "query": "How much PTO do employees get per year?",
+      "ground_truth": "Employees with 0 to 3 years of tenure receive 15 days of PTO per year. Employees with 4 or more years of tenure receive 20 days per year. PTO accrues bi-weekly with a maximum carryover of 30 days.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "policy_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-005",
+      "query": "What is the company 401k match?",
+      "ground_truth": "The company matches 100% of employee contributions up to 4% of eligible compensation, with immediate vesting. Employees are eligible to participate in the 401(k) plan after 90 days of employment. The plan is administered by Fidelity.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "benefits_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-006",
+      "query": "How should employees report harassment?",
+      "ground_truth": "Employees who experience or witness harassment should report it immediately to HR or via the anonymous ethics hotline at 1-800-555-0199.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "policy_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-007",
+      "query": "What is the professional development budget?",
+      "ground_truth": "Employees receive a professional development stipend of $1,500 per year, which can be used for courses, certifications, or conferences.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "benefits_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "HR-008",
+      "query": "What are the performance rating levels?",
+      "ground_truth": "Performance ratings range from 1 to 5: 1 means Does Not Meet Expectations, and 5 means Exceptional. Formal reviews are conducted annually in Q1, with mid-year check-ins in July.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "HR_POLICIES",
+      "category": "policy_lookup",
+      "source_file": "HR_Policy_Manual.pdf"
+    },
+    {
+      "id": "PROD-001",
+      "query": "What is TechFlow Enterprise?",
+      "ground_truth": "TechFlow Enterprise is the full-featured tier designed for large organizations. It includes everything in TechFlow Pro plus dedicated infrastructure, SSO/SAML integration, custom SLAs, a dedicated customer success manager, on-premise deployment options, advanced security controls, custom contract terms, and white-labeling capabilities. It targets Fortune 500 companies, regulated industries, and government agencies. Pricing is custom based on usage, seats, and deployment model.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "product_info",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-002",
+      "query": "What is the price of TechFlow Pro?",
+      "ground_truth": "TechFlow Pro starts at $79 per user per month billed annually, or $95 per user per month on a monthly billing cycle. Volume discounts are available for teams of 50 or more users.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "pricing",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-003",
+      "query": "What are the TechFlow mobile app features?",
+      "ground_truth": "The TechFlow mobile app is available natively for iOS and Android. It supports task management, workflow approvals, notifications, and basic reporting. The mobile app is available exclusively for TechFlow Pro and Enterprise tier subscribers. As of version 4.2, the mobile app also supports offline mode with sync on reconnect.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "product_info",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-004",
+      "query": "What is TechFlow's uptime SLA for Enterprise customers?",
+      "ground_truth": "TechFlow guarantees 99.95% monthly uptime for Enterprise cloud deployments. If the SLA is breached, customers receive service credits of 10% of the monthly fee per hour of downtime beyond the threshold, up to a maximum of 30% of the monthly fee. Scheduled maintenance windows are Sundays from 2am to 4am UTC.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "sla",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-005",
+      "query": "What was released in TechFlow version 4.2?",
+      "ground_truth": "TechFlow version 4.2, released in January 2026, introduced: native Workday integration for HR workflows, AI-powered workflow suggestions, an advanced conditional logic builder with nested condition support, 35% reduction in workflow execution latency, offline mode for the mobile app with sync on reconnect, a fix for scheduled workflows failing across daylight saving time changes, and a fix for silent data export failures on reports exceeding 100,000 rows.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "release_notes",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-006",
+      "query": "What deployment options does TechFlow offer?",
+      "ground_truth": "TechFlow offers three deployment options: Cloud SaaS (default, hosted on AWS with 99.9% uptime for Core/Pro and 99.95% for Enterprise), On-Premise (Enterprise only, using Docker and Kubernetes, requires minimum 8 CPU cores, 32GB RAM, 500GB storage), and Private Cloud (deployed in the customer's own AWS, Azure, or GCP environment with managed updates from TechFlow).",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "product_info",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-007",
+      "query": "Does TechFlow offer a free trial?",
+      "ground_truth": "Yes, all TechFlow plans include a 14-day free trial with no credit card required. Enterprise trials can be extended to 30 days upon request.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "pricing",
+      "source_file": "product_information.md"
+    },
+    {
+      "id": "PROD-008",
+      "query": "What discount does TechFlow offer for nonprofits?",
+      "ground_truth": "TechFlow offers a 30% discount for registered nonprofits and educational institutions on Core and Pro plans. Organizations must contact sales@techflow.io with proof of status to apply.",
+      "query_type": "semantic",
+      "expected_destination": "VECTOR_STORE",
+      "namespace": "PRODUCTS",
+      "category": "pricing",
+      "source_file": "product_information.md"
+    }
+]

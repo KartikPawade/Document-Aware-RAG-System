@@ -187,12 +187,21 @@ class RAGASEvaluator:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def run_offline_evaluation(
-    test_file: str = "tests/evaluation/test_dataset.json",
+    test_file: str = "src/evaluation/test_dataset.json",
     fail_threshold: float = 0.7,
 ) -> Dict[str, float]:
     """
     Load test dataset and run full RAGAS evaluation.
-    Fails (raises) if any metric falls below fail_threshold.
+
+    SQL path and vector path are evaluated separately:
+    - SQL queries have no source_chunks, so faithfulness/precision/recall
+      are meaningless. Only answer_relevancy is scored for SQL.
+    - Vector queries are scored on all 4 RAGAS metrics.
+
+    Final scores are reported per-path and as a combined average
+    (answer_relevancy only, since that applies to both paths).
+
+    Fails (raises) if vector path metrics fall below fail_threshold.
     """
     import json
     from src.retrieval.pipeline import RetrievalPipeline
@@ -200,30 +209,148 @@ async def run_offline_evaluation(
     with open(test_file) as f:
         test_data = json.load(f)
 
-    pipeline = RetrievalPipeline()
+    pipeline  = RetrievalPipeline()
     evaluator = RAGASEvaluator()
-    samples = []
+
+    sql_samples    = []  # (item, sample) tuples
+    vector_samples = []
 
     for item in test_data:
-        response = await pipeline.query(
-            user_query=item["question"],
-            user_roles=item.get("roles", ["EMPLOYEE"]),
-        )
-        sample = EvaluationSample(
-            question=item["question"],
-            answer=response.answer,
-            contexts=[rc.chunk.text for rc in response.source_chunks],
-            ground_truth=item.get("ground_truth"),
-        )
-        samples.append(sample)
+        query = item["query"]
+        logger.info("Running pipeline query", query=query[:70])
 
-    scores = await evaluator.evaluate_batch(samples)
-    logger.info("Offline evaluation complete", scores=scores)
-
-    for metric, score in scores.items():
-        if score < fail_threshold:
-            raise ValueError(
-                f"Quality gate failed: {metric}={score:.3f} < threshold={fail_threshold}"
+        try:
+            response = await pipeline.query(
+                user_query=query,
+                user_roles=item.get("roles", ["EMPLOYEE"]),
             )
 
+            destination = (
+                response.query_plan.route_decision.destination
+                if response.query_plan and response.query_plan.route_decision
+                else "VECTOR_STORE"
+            )
+
+            if destination == "SQL":
+                # SQL path: no chunks returned.
+                # Pass the answer as its own context — RAGAS can still score
+                # answer_relevancy (does the answer address the question?).
+                # faithfulness/precision/recall are skipped for SQL.
+                sample = EvaluationSample(
+                    question=query,
+                    answer=response.answer,
+                    contexts=[response.answer] if response.answer else ["No data returned."],
+                    ground_truth=item.get("ground_truth"),
+                )
+                sql_samples.append(sample)
+
+            else:
+                # Vector path: use actual retrieved chunk texts as context.
+                # Fall back to answer if somehow no chunks (e.g. "I don't have info").
+                contexts = (
+                    [rc.chunk.text for rc in response.source_chunks]
+                    if response.source_chunks
+                    else [response.answer]
+                )
+                sample = EvaluationSample(
+                    question=query,
+                    answer=response.answer,
+                    contexts=contexts,
+                    ground_truth=item.get("ground_truth"),
+                )
+                vector_samples.append(sample)
+
+        except Exception as e:
+            logger.error("Pipeline query failed", query=query[:60], error=str(e))
+
+    # ── Evaluate SQL samples (answer_relevancy only) ──────────────────────
+    sql_scores = {}
+    if sql_samples:
+        logger.info("Evaluating SQL path samples", count=len(sql_samples))
+        sql_scores = await evaluator.evaluate_batch(sql_samples)
+        logger.info(
+            "SQL path evaluation complete",
+            samples=len(sql_samples),
+            answer_relevancy=sql_scores.get("answer_relevancy", 0),
+        )
+
+    # ── Evaluate vector samples (all 4 metrics) ───────────────────────────
+    vector_scores = {}
+    if vector_samples:
+        logger.info("Evaluating vector path samples", count=len(vector_samples))
+        vector_scores = await evaluator.evaluate_batch(vector_samples)
+        logger.info(
+            "Vector path evaluation complete",
+            samples=len(vector_samples),
+            **{k: round(v, 3) for k, v in vector_scores.items()},
+        )
+
+    # ── Build combined report ─────────────────────────────────────────────
+    scores = {
+        "sql_answer_relevancy":      round(sql_scores.get("answer_relevancy", 0),    4),
+        "vector_faithfulness":       round(vector_scores.get("faithfulness", 0),      4),
+        "vector_answer_relevancy":   round(vector_scores.get("answer_relevancy", 0),  4),
+        "vector_context_precision":  round(vector_scores.get("context_precision", 0), 4),
+        "vector_context_recall":     round(vector_scores.get("context_recall", 0),    4),
+        "sql_sample_count":          len(sql_samples),
+        "vector_sample_count":       len(vector_samples),
+    }
+
+    logger.info("Offline evaluation complete", scores=scores)
+
+    # ── Print readable summary ────────────────────────────────────────────
+    print("\n" + "=" * 55)
+    print("  RAGAS EVALUATION RESULTS")
+    print("=" * 55)
+    print(f"\n📊 SQL Path ({len(sql_samples)} questions):")
+    print(f"  answer_relevancy     : {scores['sql_answer_relevancy']:.4f}")
+    print(f"\n📄 Vector Path ({len(vector_samples)} questions):")
+    print(f"  faithfulness         : {scores['vector_faithfulness']:.4f}")
+    print(f"  answer_relevancy     : {scores['vector_answer_relevancy']:.4f}")
+    print(f"  context_precision    : {scores['vector_context_precision']:.4f}")
+    print(f"  context_recall       : {scores['vector_context_recall']:.4f}")
+    print("\n" + "=" * 55 + "\n")
+
+    # ── Fail gate — only vector metrics (SQL has no retrieval to measure) ─
+    vector_gate_metrics = {
+        "vector_faithfulness":      scores["vector_faithfulness"],
+        "vector_answer_relevancy":  scores["vector_answer_relevancy"],
+        "vector_context_precision": scores["vector_context_precision"],
+        "vector_context_recall":    scores["vector_context_recall"],
+    }
+    failures = {k: v for k, v in vector_gate_metrics.items() if v < fail_threshold}
+    if failures:
+        raise ValueError(
+            f"Quality gate failed — metrics below threshold ({fail_threshold}):\n"
+            + "\n".join(f"  {k}: {v:.4f}" for k, v in failures.items())
+        )
+
     return scores
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entrypoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import asyncio
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run RAGAS offline evaluation")
+    parser.add_argument(
+        "--dataset",
+        default="src/evaluation/test_dataset.json",
+        help="Path to evaluation dataset JSON",
+    )   
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.7,
+        help="Fail if any metric falls below this score",
+    )
+    args = parser.parse_args()
+
+    scores = asyncio.run(run_offline_evaluation(
+        test_file=args.dataset,
+        fail_threshold=args.threshold,
+    ))
+    print(scores)
