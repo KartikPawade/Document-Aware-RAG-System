@@ -59,7 +59,7 @@ graph TD
     S --> A
 ```
 
-> 💡 Replace with `/docs/architecture.png` for a static image alternative.
+
 
 ---
 
