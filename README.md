@@ -315,7 +315,7 @@ git checkout -b feature/your-feature-name
 
 <div align="center">
 
-**Built by [Your Name](https://your-portfolio.com)**
+**Built by [Kartik Pawade](https://your-portfolio.com)**
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kartik-pawade/)
 
